@@ -147,4 +147,40 @@ const server = http.createServer(async (req, res) => {
   } else if (path === '/callback') {
     const code = parsedUrl.query.code;
     const postData = JSON.stringify({ code, client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uri: REDIRECT_URI, grant_type: 'authorization_code' });
-    const token = await httpsPost('oauth2.
+    const token = await httpsPost('oauth2.googleapis.com', '/token', { 'Content-Type': 'application/json', 'Content-Length': postData.length }, postData);
+    savedToken = token;
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<h1>✅ YouTube connecté! <a href="/publish">👉 Publier une vidéo</a></h1>');
+
+  } else if (path === '/debug') {
+    const ffmpeg = getFfmpeg();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ffmpeg, connecte: !!savedToken }));
+
+  } else if (path === '/publish') {
+    if (!savedToken) { res.writeHead(200); res.end('Non connecté - <a href="/auth">Se connecter</a>'); return; }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.write('<h1>🎬 Génération en cours...</h1>');
+    try {
+      const { topic, script } = await generateScript();
+      res.write('<p>✅ Script: ' + topic + '</p>');
+      const audioPath = await generateAudio(script);
+      res.write('<p>✅ Audio généré</p>');
+      const imagePath = await generateImage(topic);
+      res.write('<p>✅ Image générée</p>');
+      const video = await createVideo(audioPath, imagePath);
+      if (video.error) { res.end('<p>❌ Vidéo: ' + video.error + '</p>'); return; }
+      res.write('<p>✅ Vidéo créée</p>');
+      const result = await uploadToYoutube(topic, video.path);
+      res.end('<p>✅ Uploadée! ID: ' + (result.id || JSON.stringify(result)) + '</p>');
+    } catch(e) {
+      res.end('<p>❌ Erreur: ' + e.message + '</p>');
+    }
+
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<h1>🦑 KRAKEN YouTube Bot</h1><ul><li><a href="/auth">1. Connecter YouTube</a></li><li><a href="/publish">2. Publier une vidéo</a></li><li><a href="/debug">3. Debug</a></li></ul>');
+  }
+});
+
+server.listen(PORT, () => console.log('KRAKEN API sur port ' + PORT));
