@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID;
 const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET;
@@ -11,10 +11,19 @@ const PORT = process.env.PORT || 8080;
 
 let savedToken = null;
 
+function getFfmpeg() {
+  try { return execSync('which ffmpeg').toString().trim(); } catch(e) {}
+  try { return execSync('which ffmpeg-full').toString().trim(); } catch(e) {}
+  const paths = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/nix/store'];
+  for (const p of paths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function httpsPost(hostname, path, headers, data) {
   return new Promise((resolve, reject) => {
-    const options = { hostname, path, method: 'POST', headers };
-    const req = https.request(options, (res) => {
+    const req = https.request({ hostname, path, method: 'POST', headers }, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
       res.on('end', () => { try { resolve(JSON.parse(body)); } catch(e) { resolve(body); } });
@@ -28,6 +37,9 @@ function httpsPost(hostname, path, headers, data) {
 function httpsGet(urlStr) {
   return new Promise((resolve, reject) => {
     https.get(urlStr, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        return httpsGet(res.headers.location).then(resolve).catch(reject);
+      }
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => resolve(Buffer.concat(chunks)));
@@ -60,10 +72,7 @@ async function generateAudio(script) {
     }, (res) => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => {
-        fs.writeFileSync('/tmp/audio.mp3', Buffer.concat(chunks));
-        resolve('/tmp/audio.mp3');
-      });
+      res.on('end', () => { fs.writeFileSync('/tmp/audio.mp3', Buffer.concat(chunks)); resolve('/tmp/audio.mp3'); });
     });
     req.on('error', reject);
     req.write(data);
@@ -73,18 +82,19 @@ async function generateAudio(script) {
 
 async function generateImage(topic) {
   const prompt = encodeURIComponent(`${topic}, cinematic, dramatic, high quality`);
-  const imgUrl = `https://image.pollinations.ai/prompt/${prompt}?width=1280&height=720&nologo=true`;
-  const imgData = await httpsGet(imgUrl);
+  const imgData = await httpsGet(`https://image.pollinations.ai/prompt/${prompt}?width=1280&height=720&nologo=true`);
   fs.writeFileSync('/tmp/image.jpg', imgData);
   return '/tmp/image.jpg';
 }
 
 async function createVideo(audioPath, imagePath) {
+  const ffmpeg = getFfmpeg();
+  if (!ffmpeg) return { error: 'FFmpeg non trouvé: ' + ffmpeg };
   try {
-    execSync(`ffmpeg -y -loop 1 -i ${imagePath} -i ${audioPath} -c:v libx264 -c:a aac -shortest -pix_fmt yuv420p /tmp/video.mp4`);
-    return '/tmp/video.mp4';
+    execSync(`${ffmpeg} -y -loop 1 -i ${imagePath} -i ${audioPath} -c:v libx264 -c:a aac -shortest -pix_fmt yuv420p /tmp/video.mp4 2>&1`);
+    return { path: '/tmp/video.mp4' };
   } catch(e) {
-    return null;
+    return { error: e.message };
   }
 }
 
@@ -92,16 +102,16 @@ async function uploadToYoutube(title, videoPath) {
   if (!savedToken) return { error: 'Non connecté' };
   const videoData = fs.readFileSync(videoPath);
   const metadata = JSON.stringify({
-    snippet: { title, description: `${title} - Découvrez cette histoire fascinante!`, categoryId: '22', tags: ['insolite', 'mystère', 'faits'] },
+    snippet: { title, description: `${title} - Histoire fascinante!`, categoryId: '22' },
     status: { privacyStatus: 'public' }
   });
+  const boundary = 'boundary123';
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: video/mp4\r\n\r\n`),
+    videoData,
+    Buffer.from(`\r\n--${boundary}--`)
+  ]);
   return new Promise((resolve, reject) => {
-    const boundary = 'boundary123';
-    const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: video/mp4\r\n\r\n`),
-      videoData,
-      Buffer.from(`\r\n--${boundary}--`)
-    ]);
     const req = https.request({
       hostname: 'www.googleapis.com',
       path: '/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart',
@@ -127,11 +137,9 @@ const server = http.createServer(async (req, res) => {
   const path = parsedUrl.pathname;
 
   if (path === '/auth') {
-    const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' +
-      'client_id=' + CLIENT_ID +
+    const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + CLIENT_ID +
       '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
-      '&response_type=code' +
-      '&scope=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.upload') +
+      '&response_type=code&scope=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.upload') +
       '&access_type=offline';
     res.writeHead(302, { Location: authUrl });
     res.end();
@@ -139,39 +147,4 @@ const server = http.createServer(async (req, res) => {
   } else if (path === '/callback') {
     const code = parsedUrl.query.code;
     const postData = JSON.stringify({ code, client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uri: REDIRECT_URI, grant_type: 'authorization_code' });
-    const token = await httpsPost('oauth2.googleapis.com', '/token', { 'Content-Type': 'application/json', 'Content-Length': postData.length }, postData);
-    savedToken = token;
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>✅ YouTube connecté! <a href="/publish">👉 Publier une vidéo maintenant</a></h1>');
-
-  } else if (path === '/publish') {
-    if (!savedToken) { res.writeHead(200); res.end('Non connecté - va sur /auth'); return; }
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.write('<h1>🎬 Génération en cours...</h1>');
-    try {
-      const { topic, script } = await generateScript();
-      res.write('<p>✅ Script généré</p>');
-      const audioPath = await generateAudio(script);
-      res.write('<p>✅ Audio généré</p>');
-      const imagePath = await generateImage(topic);
-      res.write('<p>✅ Image générée</p>');
-      const videoPath = await createVideo(audioPath, imagePath);
-      if (!videoPath) { res.end('<p>❌ FFmpeg non disponible</p>'); return; }
-      res.write('<p>✅ Vidéo créée</p>');
-      const result = await uploadToYoutube(topic, videoPath);
-      res.end(`<p>✅ Uploadée sur YouTube! ID: ${result.id || JSON.stringify(result)}</p>`);
-    } catch(e) {
-      res.end('<p>❌ Erreur: ' + e.message + '</p>');
-    }
-
-  } else if (path === '/status') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ connecte: !!savedToken }));
-
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>🦑 KRAKEN YouTube Bot</h1><ul><li><a href="/auth">1. Connecter YouTube</a></li><li><a href="/publish">2. Publier une vidéo</a></li><li><a href="/status">3. Statut</a></li></ul>');
-  }
-});
-
-server.listen(PORT, () => console.log('KRAKEN API sur port ' + PORT));
+    const token = await httpsPost('oauth2.
