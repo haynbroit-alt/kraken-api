@@ -12,11 +12,8 @@ const PORT = process.env.PORT || 8080;
 let savedToken = null;
 
 function getFfmpeg() {
-  try { 
-    const p = execSync('which ffmpeg').toString().trim();
-    if (p) return p;
-  } catch(e) {}
   if (fs.existsSync('/usr/bin/ffmpeg')) return '/usr/bin/ffmpeg';
+  try { return execSync('which ffmpeg').toString().trim(); } catch(e) {}
   return null;
 }
 
@@ -33,22 +30,6 @@ function httpsPost(hostname, path, headers, data) {
   });
 }
 
-function httpsGet(urlStr) {
-  return new Promise((resolve, reject) => {
-    const get = (u) => {
-      https.get(u, (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          return get(res.headers.location);
-        }
-        const chunks = [];
-        res.on('data', chunk => chunks.push(chunk));
-        res.on('end', () => resolve(Buffer.concat(chunks)));
-      }).on('error', reject);
-    };
-    get(urlStr);
-  });
-}
-
 async function generateScript() {
   const topics = [
     "Un fait insolite sur les animaux marins",
@@ -58,7 +39,7 @@ async function generateScript() {
     "Une coincidence incroyable dans l histoire"
   ];
   const topic = topics[Math.floor(Math.random() * topics.length)];
-  const script = "Aujourd hui: " + topic + ". C est fascinant. Restez jusqu a la fin pour decouvrir le secret. " + topic + " passionne des millions de personnes dans le monde entier.";
+  const script = "Aujourd hui: " + topic + ". C est fascinant. Restez jusqu a la fin. " + topic + " passionne des millions de personnes.";
   return { topic, script };
 }
 
@@ -86,21 +67,29 @@ async function generateAudio(script) {
   });
 }
 
-async function generateImage(topic) {
-  const prompt = encodeURIComponent(topic + " cinematic dramatic high quality");
-  const imgData = await httpsGet("https://image.pollinations.ai/prompt/" + prompt + "?width=1280&height=720&nologo=true&seed=42");
-  fs.writeFileSync('/tmp/image.jpg', imgData);
-  return '/tmp/image.jpg';
-}
-
-async function createVideo(audioPath, imagePath) {
+async function createVideo(audioPath, topic) {
   const ffmpeg = getFfmpeg();
   if (!ffmpeg) return { error: 'FFmpeg non trouve' };
   try {
-    execSync(ffmpeg + " -y -loop 1 -i " + imagePath + " -i " + audioPath + " -c:v libx264 -c:a aac -shortest -pix_fmt yuv420p -vf scale=1280:720 /tmp/video.mp4", { timeout: 120000 });
+    const text = topic.replace(/'/g, '').substring(0, 50);
+    execSync(
+      ffmpeg + " -y -f lavfi -i color=c=0x1a1a2e:size=1280x720:rate=25 -i " + audioPath +
+      " -vf \"drawtext=text='" + text + "':fontcolor=white:fontsize=40:x=(w-text_w)/2:y=(h-text_h)/2\" " +
+      "-c:v libx264 -c:a aac -shortest -pix_fmt yuv420p /tmp/video.mp4",
+      { timeout: 120000 }
+    );
     return { path: '/tmp/video.mp4' };
   } catch(e) {
-    return { error: e.message.substring(0, 300) };
+    try {
+      execSync(
+        ffmpeg + " -y -f lavfi -i color=c=blue:size=1280x720:rate=25 -i " + audioPath +
+        " -c:v libx264 -c:a aac -shortest -pix_fmt yuv420p /tmp/video.mp4",
+        { timeout: 120000 }
+      );
+      return { path: '/tmp/video.mp4' };
+    } catch(e2) {
+      return { error: e2.message.substring(0, 300) };
+    }
   }
 }
 
@@ -172,13 +161,11 @@ const server = http.createServer(async (req, res) => {
       res.write('<p>Script: ' + topic + '</p>');
       const audioPath = await generateAudio(script);
       res.write('<p>Audio genere</p>');
-      const imagePath = await generateImage(topic);
-      res.write('<p>Image generee</p>');
-      const video = await createVideo(audioPath, imagePath);
+      const video = await createVideo(audioPath, topic);
       if (video.error) { res.end('<p>Erreur video: ' + video.error + '</p>'); return; }
       res.write('<p>Video creee</p>');
       const result = await uploadToYoutube(topic, video.path);
-      res.end('<p>Uploadee sur YouTube! ID: ' + (result.id || JSON.stringify(result)) + '</p>');
+      res.end('<p>Uploadee! ID: ' + (result.id || JSON.stringify(result).substring(0, 200)) + '</p>');
     } catch(e) {
       res.end('<p>Erreur: ' + e.message + '</p>');
     }
