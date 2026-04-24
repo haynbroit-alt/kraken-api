@@ -1,11 +1,12 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
+const fs = require('fs');
 
-const CLIENT_KEY = 'awd6vps5eb7yi1je';
-const CLIENT_SECRET = process.env.TIKTOK_CLIENT_SECRET;
-const REDIRECT_URI = process.env.TIKTOK_REDIRECT_URI;
-const PORT = process.env.PORT || 3000;
+const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID;
+const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET;
+const REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI;
+const PORT = process.env.PORT || 8080;
 
 let savedToken = null;
 
@@ -13,39 +14,56 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
   const path = parsedUrl.pathname;
 
+  // Connexion Google
   if (path === '/auth') {
-    const authUrl = 'https://www.tiktok.com/v2/auth/authorize/?client_key=' + CLIENT_KEY + '&response_type=code&scope=user.info.basic,video.publish,video.upload&redirect_uri=' + encodeURIComponent(REDIRECT_URI) + '&state=kraken123';
+    const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' +
+      'client_id=' + CLIENT_ID +
+      '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
+      '&response_type=code' +
+      '&scope=' + encodeURIComponent('https://www.googleapis.com/auth/youtube.upload') +
+      '&access_type=offline';
     res.writeHead(302, { Location: authUrl });
     res.end();
+
+  // Callback après connexion
   } else if (path === '/callback') {
     const code = parsedUrl.query.code;
-    const postData = 'client_key=' + CLIENT_KEY + '&client_secret=' + CLIENT_SECRET + '&code=' + code + '&grant_type=authorization_code&redirect_uri=' + encodeURIComponent(REDIRECT_URI);
+    const postData = JSON.stringify({
+      code,
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      redirect_uri: REDIRECT_URI,
+      grant_type: 'authorization_code'
+    });
     const options = {
-      hostname: 'open.tiktokapis.com',
-      path: '/v2/oauth/token/',
+      hostname: 'oauth2.googleapis.com',
+      path: '/token',
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': postData.length
+      }
     };
     const tokenReq = https.request(options, (tokenRes) => {
       let data = '';
-      tokenRes.on('data', (chunk) => { data += chunk; });
+      tokenRes.on('data', chunk => { data += chunk; });
       tokenRes.on('end', () => {
         savedToken = JSON.parse(data);
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h1>✅ TikTok connecté !</h1><p>open_id: ' + savedToken.open_id + '</p>');
+        res.end('<h1>✅ YouTube connecté !</h1><p>Token sauvegardé. Va sur /upload pour tester.</p>');
       });
     });
     tokenReq.write(postData);
     tokenReq.end();
+
+  // Voir le token
   } else if (path === '/token') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(savedToken));
-  } else {
-    res.writeHead(200);
-    res.end('🦜 KRAKEN API en ligne !');
-  }
-});
 
-server.listen(PORT, () => {
-  console.log('KRAKEN API sur port ' + PORT);
-});
+  // Page d'accueil
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<h1>🦑 KRAKEN YouTube API</h1><a href="/auth">👉 Connecter YouTube</a>');
+  }
+})
