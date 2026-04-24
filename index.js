@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const fs = require('fs');
-const { execSync, spawnSync } = require('child_process');
+const { execSync } = require('child_process');
 
 const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID;
 const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET;
@@ -12,12 +12,11 @@ const PORT = process.env.PORT || 8080;
 let savedToken = null;
 
 function getFfmpeg() {
-  try { return execSync('which ffmpeg').toString().trim(); } catch(e) {}
-  try { return execSync('which ffmpeg-full').toString().trim(); } catch(e) {}
-  const paths = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/nix/store'];
-  for (const p of paths) {
-    if (fs.existsSync(p)) return p;
-  }
+  try { 
+    const p = execSync('which ffmpeg').toString().trim();
+    if (p) return p;
+  } catch(e) {}
+  if (fs.existsSync('/usr/bin/ffmpeg')) return '/usr/bin/ffmpeg';
   return null;
 }
 
@@ -36,27 +35,31 @@ function httpsPost(hostname, path, headers, data) {
 
 function httpsGet(urlStr) {
   return new Promise((resolve, reject) => {
-    https.get(urlStr, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return httpsGet(res.headers.location).then(resolve).catch(reject);
-      }
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-    }).on('error', reject);
+    const get = (u) => {
+      https.get(u, (res) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          return get(res.headers.location);
+        }
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      }).on('error', reject);
+    };
+    get(urlStr);
   });
 }
 
 async function generateScript() {
   const topics = [
     "Un fait insolite sur les animaux marins",
-    "Une histoire vraie bizarre qui s'est passée en France",
-    "Un mystère scientifique inexpliqué",
-    "Un fait choquant sur l'espace",
-    "Une coïncidence incroyable dans l'histoire"
+    "Une histoire vraie bizarre en France",
+    "Un mystere scientifique inexplique",
+    "Un fait choquant sur l espace",
+    "Une coincidence incroyable dans l histoire"
   ];
   const topic = topics[Math.floor(Math.random() * topics.length)];
-  return { topic, script: `Aujourd'hui: ${topic}. C'est fascinant. Restez jusqu'à la fin pour découvrir le secret. ${topic} passionne des millions de personnes dans le monde entier.` };
+  const script = "Aujourd hui: " + topic + ". C est fascinant. Restez jusqu a la fin pour decouvrir le secret. " + topic + " passionne des millions de personnes dans le monde entier.";
+  return { topic, script };
 }
 
 async function generateAudio(script) {
@@ -72,7 +75,10 @@ async function generateAudio(script) {
     }, (res) => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => { fs.writeFileSync('/tmp/audio.mp3', Buffer.concat(chunks)); resolve('/tmp/audio.mp3'); });
+      res.on('end', () => {
+        fs.writeFileSync('/tmp/audio.mp3', Buffer.concat(chunks));
+        resolve('/tmp/audio.mp3');
+      });
     });
     req.on('error', reject);
     req.write(data);
@@ -81,35 +87,35 @@ async function generateAudio(script) {
 }
 
 async function generateImage(topic) {
-  const prompt = encodeURIComponent(`${topic}, cinematic, dramatic, high quality`);
-  const imgData = await httpsGet(`https://image.pollinations.ai/prompt/${prompt}?width=1280&height=720&nologo=true`);
+  const prompt = encodeURIComponent(topic + " cinematic dramatic high quality");
+  const imgData = await httpsGet("https://image.pollinations.ai/prompt/" + prompt + "?width=1280&height=720&nologo=true&seed=42");
   fs.writeFileSync('/tmp/image.jpg', imgData);
   return '/tmp/image.jpg';
 }
 
 async function createVideo(audioPath, imagePath) {
   const ffmpeg = getFfmpeg();
-  if (!ffmpeg) return { error: 'FFmpeg non trouvé: ' + ffmpeg };
+  if (!ffmpeg) return { error: 'FFmpeg non trouve' };
   try {
-    execSync(`${ffmpeg} -y -loop 1 -i ${imagePath} -i ${audioPath} -c:v libx264 -c:a aac -shortest -pix_fmt yuv420p /tmp/video.mp4 2>&1`);
+    execSync(ffmpeg + " -y -loop 1 -i " + imagePath + " -i " + audioPath + " -c:v libx264 -c:a aac -shortest -pix_fmt yuv420p -vf scale=1280:720 /tmp/video.mp4", { timeout: 120000 });
     return { path: '/tmp/video.mp4' };
   } catch(e) {
-    return { error: e.message };
+    return { error: e.message.substring(0, 300) };
   }
 }
 
 async function uploadToYoutube(title, videoPath) {
-  if (!savedToken) return { error: 'Non connecté' };
+  if (!savedToken) return { error: 'Non connecte' };
   const videoData = fs.readFileSync(videoPath);
   const metadata = JSON.stringify({
-    snippet: { title, description: `${title} - Histoire fascinante!`, categoryId: '22' },
+    snippet: { title: title, description: title + " - Histoire fascinante!", categoryId: '22' },
     status: { privacyStatus: 'public' }
   });
   const boundary = 'boundary123';
   const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: video/mp4\r\n\r\n`),
+    Buffer.from("--" + boundary + "\r\nContent-Type: application/json\r\n\r\n" + metadata + "\r\n--" + boundary + "\r\nContent-Type: video/mp4\r\n\r\n"),
     videoData,
-    Buffer.from(`\r\n--${boundary}--`)
+    Buffer.from("\r\n--" + boundary + "--")
   ]);
   return new Promise((resolve, reject) => {
     const req = https.request({
@@ -118,7 +124,7 @@ async function uploadToYoutube(title, videoPath) {
       method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + savedToken.access_token,
-        'Content-Type': `multipart/related; boundary=${boundary}`,
+        'Content-Type': 'multipart/related; boundary=' + boundary,
         'Content-Length': body.length
       }
     }, (res) => {
@@ -146,40 +152,40 @@ const server = http.createServer(async (req, res) => {
 
   } else if (path === '/callback') {
     const code = parsedUrl.query.code;
-    const postData = JSON.stringify({ code, client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uri: REDIRECT_URI, grant_type: 'authorization_code' });
+    const postData = JSON.stringify({ code: code, client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uri: REDIRECT_URI, grant_type: 'authorization_code' });
     const token = await httpsPost('oauth2.googleapis.com', '/token', { 'Content-Type': 'application/json', 'Content-Length': postData.length }, postData);
     savedToken = token;
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<h1>✅ YouTube connecté! <a href="/publish">👉 Publier une vidéo</a></h1>');
+    res.end('<h1>YouTube connecte! <a href="/publish">Publier une video</a></h1>');
 
   } else if (path === '/debug') {
     const ffmpeg = getFfmpeg();
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ffmpeg, connecte: !!savedToken }));
+    res.end(JSON.stringify({ ffmpeg: ffmpeg, connecte: !!savedToken }));
 
   } else if (path === '/publish') {
-    if (!savedToken) { res.writeHead(200); res.end('Non connecté - <a href="/auth">Se connecter</a>'); return; }
+    if (!savedToken) { res.writeHead(200); res.end('Non connecte - <a href="/auth">Se connecter</a>'); return; }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.write('<h1>🎬 Génération en cours...</h1>');
+    res.write('<h1>Generation en cours...</h1>');
     try {
       const { topic, script } = await generateScript();
-      res.write('<p>✅ Script: ' + topic + '</p>');
+      res.write('<p>Script: ' + topic + '</p>');
       const audioPath = await generateAudio(script);
-      res.write('<p>✅ Audio généré</p>');
+      res.write('<p>Audio genere</p>');
       const imagePath = await generateImage(topic);
-      res.write('<p>✅ Image générée</p>');
+      res.write('<p>Image generee</p>');
       const video = await createVideo(audioPath, imagePath);
-      if (video.error) { res.end('<p>❌ Vidéo: ' + video.error + '</p>'); return; }
-      res.write('<p>✅ Vidéo créée</p>');
+      if (video.error) { res.end('<p>Erreur video: ' + video.error + '</p>'); return; }
+      res.write('<p>Video creee</p>');
       const result = await uploadToYoutube(topic, video.path);
-      res.end('<p>✅ Uploadée! ID: ' + (result.id || JSON.stringify(result)) + '</p>');
+      res.end('<p>Uploadee sur YouTube! ID: ' + (result.id || JSON.stringify(result)) + '</p>');
     } catch(e) {
-      res.end('<p>❌ Erreur: ' + e.message + '</p>');
+      res.end('<p>Erreur: ' + e.message + '</p>');
     }
 
   } else {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<h1>🦑 KRAKEN YouTube Bot</h1><ul><li><a href="/auth">1. Connecter YouTube</a></li><li><a href="/publish">2. Publier une vidéo</a></li><li><a href="/debug">3. Debug</a></li></ul>');
+    res.end('<h1>KRAKEN YouTube Bot</h1><ul><li><a href="/auth">1. Connecter YouTube</a></li><li><a href="/publish">2. Publier une video</a></li><li><a href="/debug">3. Debug</a></li></ul>');
   }
 });
 
