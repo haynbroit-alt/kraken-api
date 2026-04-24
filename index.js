@@ -1,7 +1,6 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
-const fs = require('fs');
 
 const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID;
 const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET;
@@ -14,7 +13,6 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
   const path = parsedUrl.pathname;
 
-  // Connexion Google
   if (path === '/auth') {
     const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' +
       'client_id=' + CLIENT_ID +
@@ -24,8 +22,6 @@ const server = http.createServer(async (req, res) => {
       '&access_type=offline';
     res.writeHead(302, { Location: authUrl });
     res.end();
-
-  // Callback après connexion
   } else if (path === '/callback') {
     const code = parsedUrl.query.code;
     const postData = JSON.stringify({
@@ -50,20 +46,20 @@ const server = http.createServer(async (req, res) => {
       tokenRes.on('end', () => {
         savedToken = JSON.parse(data);
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h1>✅ YouTube connecté !</h1><p>Token sauvegardé. Va sur /upload pour tester.</p>');
+        res.end('<h1>✅ YouTube connecté !</h1>');
       });
     });
     tokenReq.write(postData);
     tokenReq.end();
-
-  // Voir le token
   } else if (path === '/token') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(savedToken));
-
-  // Page d'accueil
   } else {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end('<h1>🦑 KRAKEN YouTube API</h1><a href="/auth">👉 Connecter YouTube</a>');
   }
-})
+});
+
+server.listen(PORT, () => {
+  console.log('KRAKEN API sur port ' + PORT);
+});
