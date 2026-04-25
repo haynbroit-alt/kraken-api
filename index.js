@@ -4,7 +4,7 @@ let token=null;
 function post(h,p,hd,d){return new Promise((ok,ko)=>{const r=https.request({hostname:h,path:p,method:'POST',headers:hd},(res)=>{let b='';res.on('data',c=>b+=c);res.on('end',()=>{try{ok(JSON.parse(b))}catch(e){ok(b)}})});r.on('error',ko);r.write(d);r.end()})}
 async function audio(text){
 if(!ELEVEN)return null;
-const d=JSON.stringify({text,model_id:'eleven_multilingual_v2',voice_settings:{stability:0.5,similarity_boost:0.75}});
+const d=JSON.stringify({text,model_id:'eleven_multilingual_v2'});
 return new Promise((ok,ko)=>{
 const r=https.request({hostname:'api.elevenlabs.io',path:'/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM',method:'POST',headers:{'xi-api-key':ELEVEN,'Content-Type':'application/json','Content-Length':Buffer.byteLength(d),'Accept':'audio/mpeg'}},(res)=>{
 const c=[];res.on('data',x=>c.push(x));res.on('end',()=>{fs.writeFileSync('/tmp/a.mp3',Buffer.concat(c));ok('/tmp/a.mp3')});
@@ -14,9 +14,10 @@ async function video(audioPath){
 const ff='/usr/bin/ffmpeg';
 if(audioPath&&fs.existsSync(audioPath)){
 try{
-execSync(ff+' -y -f lavfi -i color=c=0x1a1a2e:size=1280x720:rate=25 -i '+audioPath+' -c:v libx264 -c:a aac -b:a 192k -ar 44100 -shortest -pix_fmt yuv420p /tmp/v.mp4',{timeout:120000});
+execSync(ff+' -y -i /tmp/a.mp3 -ar 44100 -ac 2 /tmp/a.wav',{timeout:30000});
+execSync(ff+' -y -f lavfi -i color=c=0x1a1a2e:size=1280x720:rate=25 -i /tmp/a.wav -c:v libx264 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p /tmp/v.mp4',{timeout:120000});
 return '/tmp/v.mp4';
-}catch(e){console.log('audio err:'+e.message);}
+}catch(e){console.log('err:'+e.message);}
 }
 execSync(ff+' -y -f lavfi -i color=c=blue:size=1280x720:rate=25 -f lavfi -i anullsrc=r=44100:cl=stereo -t 30 -c:v libx264 -c:a aac -pix_fmt yuv420p /tmp/v.mp4',{timeout:60000});
 return '/tmp/v.mp4';
@@ -31,7 +32,7 @@ const topics=['Un fait insolite sur les animaux marins','Une histoire vraie biza
 const server=http.createServer(async(req,res)=>{
 const p=url.parse(req.url,true).pathname;
 if(p==='/auth'){res.writeHead(302,{Location:'https://accounts.google.com/o/oauth2/v2/auth?client_id='+CLIENT_ID+'&redirect_uri='+encodeURIComponent(REDIRECT_URI)+'&response_type=code&scope='+encodeURIComponent('https://www.googleapis.com/auth/youtube.upload')+'&access_type=offline&prompt=consent'});res.end();}
-else if(p==='/callback'){const code=url.parse(req.url,true).query.code,d=JSON.stringify({code,client_id:CLIENT_ID,client_secret:CLIENT_SECRET,redirect_uri:REDIRECT_URI,grant_type:'authorization_code'});token=await post('oauth2.googleapis.com','/token',{'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)},d);fs.writeFileSync('/tmp/token.json',JSON.stringify(token));res.writeHead(200);res.end('<h1>Connecte!</h1><a href="/publish">Publier une video</a>');}
+else if(p==='/callback'){const code=url.parse(req.url,true).query.code,d=JSON.stringify({code,client_id:CLIENT_ID,client_secret:CLIENT_SECRET,redirect_uri:REDIRECT_URI,grant_type:'authorization_code'});token=await post('oauth2.googleapis.com','/token',{'Content-Type':'application/json','Content-Length':Buffer.byteLength(d)},d);fs.writeFileSync('/tmp/token.json',JSON.stringify(token));res.writeHead(200);res.end('<h1>Connecte!</h1><a href="/publish">Publier</a>');}
 else if(p==='/publish'){
 if(!token){
 if(fs.existsSync('/tmp/token.json')){token=JSON.parse(fs.readFileSync('/tmp/token.json'));}
@@ -50,6 +51,6 @@ const r=await upload(topic,vp);
 res.end('<p>YouTube ID: '+(r.id||JSON.stringify(r).substring(0,200))+'</p>');
 }catch(e){res.end('<p>Erreur: '+e.message+'</p>');}
 }
-else{res.writeHead(200);res.end('<h1>KRAKEN Bot</h1><a href="/auth">Connecter YouTube</a> | <a href="/publish">Publier une video</a>');}
+else{res.writeHead(200);res.end('<h1>KRAKEN Bot</h1><a href="/auth">Connecter YouTube</a> | <a href="/publish">Publier</a>');}
 });
 server.listen(PORT,()=>console.log('OK '+PORT));
