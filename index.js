@@ -267,23 +267,26 @@ async function generateAndPublish() {
   // 1. Script
   console.log('📝 Génération du script...');
   const script = await generateScript();
-  const { title, blocks, imagePrompts, description } = script;
-  console.log(`✅ Titre: "${title}"`);
-  console.log(`✅ ${blocks.length} blocs, ${imagePrompts.length} prompts images`);
+  const { title, description } = script;
+  const blocks = script.blocks.slice(0, 8);
+  const imagePrompts = (script.imagePrompts || []).slice(0, 8);
+  console.log('Titre: ' + title);
+  console.log('Blocs: ' + blocks.length);
 
-  // 2. Images en parallèle
-  console.log('\n🎨 Génération des images cinématiques...');
-  const imagePromises = imagePrompts.slice(0, blocks.length).map((prompt, i) =>
-    generateImage(prompt, i).catch(e => {
-      console.error(`❌ Image ${i} échouée:`, e.message);
+  // 2. Images en parallèle (max 8)
+  console.log('Generation images...');
+  const imagePromises = blocks.map((_, i) => {
+    const prompt = imagePrompts[i] || 'cinematic dramatic landscape 8K';
+    return generateImage(prompt, i).catch(e => {
+      console.error('Image ' + i + ' failed:', e.message);
       return null;
-    })
-  );
+    });
+  });
   const images = (await Promise.all(imagePromises)).filter(Boolean);
-  console.log(`✅ ${images.length} images générées`);
+  console.log(images.length + ' images generees');
 
-  // 3. Voix séquentielles (API ElevenLabs rate limit)
-  console.log('\n🎤 Génération des voix...');
+  // 3. Voix sequentielles
+  console.log('Generation voix...');
   const voices = [];
   for (let i = 0; i < blocks.length; i++) {
     try {
