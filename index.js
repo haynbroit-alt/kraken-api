@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT;
 const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || process.env.REDIRECT_URI;
