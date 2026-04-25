@@ -143,37 +143,26 @@ async function generateScript() {
 }
 
 
-// ─── Génération voix ElevenLabs ───────────────────────────────────────────────
+// ─── Génération voix Google TTS (gratuit) ────────────────────────────────────
 async function generateVoice(text, index) {
   const dest = `/tmp/voice_${index}.mp3`;
-  const payload = JSON.stringify({
-    text,
-    model_id: 'eleven_multilingual_v2',
-    voice_settings: { stability: 0.4, similarity_boost: 0.85, style: 0.3, use_speaker_boost: true }
-  });
+  const encoded = encodeURIComponent(text.substring(0, 200));
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=fr&client=tw-ob`;
 
   return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.elevenlabs.io',
-      path: `/v1/text-to-speech/${ELEVEN_VOICE}`,
-      method: 'POST',
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': ELEVEN_KEY,
-        'Content-Length': Buffer.byteLength(payload)
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        https.get(res.headers.location, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res2 => {
+          const chunks = [];
+          res2.on('data', d => chunks.push(d));
+          res2.on('end', () => { fs.writeFileSync(dest, Buffer.concat(chunks)); resolve(dest); });
+        }).on('error', reject);
+      } else {
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => { fs.writeFileSync(dest, Buffer.concat(chunks)); resolve(dest); });
       }
-    }, res => {
-      const chunks = [];
-      res.on('data', d => chunks.push(d));
-      res.on('end', () => {
-        fs.writeFileSync(dest, Buffer.concat(chunks));
-        resolve(dest);
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
+    }).on('error', reject);
   });
 }
 
