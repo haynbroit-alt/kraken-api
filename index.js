@@ -1,421 +1,279 @@
 const http = require('http');
 const https = require('https');
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 const { google } = require('googleapis');
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 8080;
 const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || process.env.REDIRECT_URI;
-const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_API_KEY;
 const ELEVEN_VOICE = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
 
 let savedToken = process.env.YOUTUBE_TOKEN ? JSON.parse(process.env.YOUTUBE_TOKEN) : null;
 
-// ─── OAuth2 ───────────────────────────────────────────────────────────────────
 function getOAuth2Client() {
   return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
 }
 
-// ─── Téléchargement d'image ───────────────────────────────────────────────────
-function downloadImage(url, dest) {
+function download(url, dest) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, res => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        https.get(res.headers.location, res2 => {
-          res2.pipe(file);
-          file.on('finish', () => { file.close(); resolve(); });
-        }).on('error', reject);
-      } else {
-        res.pipe(file);
-        file.on('finish', () => { file.close(); resolve(); });
-      }
-    }).on('error', reject);
+    const follow = (u) => {
+      const mod = u.startsWith('https') ? https : require('http');
+      mod.get(u, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+        if ([301, 302, 303].includes(res.statusCode)) return follow(res.headers.location);
+        if (res.statusCode !== 200) return reject(new Error('HTTP ' + res.statusCode));
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => { fs.writeFileSync(dest, Buffer.concat(chunks)); resolve(dest); });
+        res.on('error', reject);
+      }).on('error', reject);
+    };
+    follow(url);
   });
 }
 
-// ─── Génération d'image HD via Pollinations ───────────────────────────────────
 async function generateImage(prompt, index) {
-  const seed = Math.floor(Math.random() * 99999);
-  // Prompts cinématiques avec style moderne
-  const cinemaPrompt = `${prompt}, cinematic 8K photography, ultra-realistic, dramatic lighting, 
-    shallow depth of field, golden hour, professional color grading, hyperdetailed, 
-    award-winning photo, vivid colors, epic composition, --ar 16:9`;
-  
-  const encoded = encodeURIComponent(cinemaPrompt);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1920&height=1080&seed=${seed}&model=flux&nologo=true&enhance=true`;
   const dest = `/tmp/img_${index}.jpg`;
-  
-  console.log(`🎨 Génération image ${index + 1}...`);
-  await downloadImage(url, dest);
-  return dest;
+  const clean = `/tmp/imgc_${index}.jpg`;
+  const seed = Math.floor(Math.random() * 99999);
+  const full = prompt + ', cinematic 8K, dramatic lighting, ultra-realistic';
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(full)}?width=1920&height=1080&seed=${seed}&model=flux&nologo=true`;
+  console.log(`Image ${index + 1}...`);
+  await download(url, dest);
+  if (fs.statSync(dest).size < 5000) throw new Error('Image trop petite');
+  execSync(`ffmpeg -y -i "${dest}" -vf scale=1920:1080 "${clean}" 2>/dev/null`);
+  return clean;
 }
 
-// ─── Génération script via Pollinations AI (gratuit, sans clé) ───────────────
+const FALLBACK = {
+  title: "Les Secrets que la Science Vient de Révéler",
+  description: "Découvrez les vérités cachées. #viral #science #découverte",
+  blocks: [
+    "Et si tout ce que tu croyais savoir était faux ? Les scientifiques viennent de faire une découverte qui change tout.",
+    "Depuis des décennies, certaines informations sont gardées secrètes. Aujourd'hui on lève enfin le voile.",
+    "En 1969, des chercheurs ont découvert quelque chose d'extraordinaire. Personne n'en a parlé pendant 50 ans.",
+    "Le cerveau humain traite 11 millions de bits par seconde. On en utilise consciemment que 50. Pourquoi ?",
+    "Dans les profondeurs de l'océan, à 11 km de profondeur, vivent des créatures que la science ne comprend pas.",
+    "Les grandes entreprises dépensent des milliards pour que tu ne saches pas ça. Voici pourquoi.",
+    "En 2019, la NASA a détecté un signal répétitif toutes les 16 jours venant du bord de notre galaxie.",
+    "Abonne-toi pour découvrir chaque semaine une nouvelle vérité cachée sur notre monde."
+  ],
+  imagePrompts: Array(8).fill("cinematic space galaxy stars dramatic lighting 8K ultra realistic")
+};
+
 async function generateScript() {
   const topics = [
-    "Les secrets que la NASA cache sur ce qui se passe vraiment dans l'espace profond",
-    "Comment les milliardaires ont réellement construit leur fortune — la vérité que personne ne dit",
-    "Les 10 technologies classifiées qui existent déjà et vont changer l'humanité",
-    "Ce qui se passe vraiment au fond des océans — les scientifiques sont terrifiés",
-    "Les civilisations avancées qui ont existé avant l'histoire officielle",
-    "Ce que ton cerveau fait pendant que tu dors — les découvertes qui bouleversent la science",
-    "Les lieux sur Terre où la réalité semble impossible — explications scientifiques",
-    "Pourquoi les génies pensent différemment — les secrets du cerveau des Einstein et Da Vinci",
-    "La vérité sur l'alimentation industrielle — ce que les grandes marques te cachent depuis 50 ans",
-    "Les expériences scientifiques secrètes qui ont changé l'histoire de l'humanité",
-    "Pourquoi nous ne sommes peut-être pas seuls dans l'univers — les preuves s'accumulent",
-    "Les prophéties qui se réalisent une à une — coïncidence ou quelque chose de plus grand",
-    "Comment fonctionne vraiment l'argent — le système que l'école ne t'apprendra jamais",
-    "Les guerres oubliées qui ont changé le cours de l'histoire mondiale",
-    "La psychologie des manipulateurs — comment te protéger des gens toxiques",
+    "Les secrets que la NASA cache sur l'espace profond",
+    "Comment les milliardaires ont construit leur fortune",
+    "Les technologies classifiées qui vont changer l'humanité",
+    "Ce qui se passe vraiment au fond des océans",
+    "Les civilisations avancées avant l'histoire officielle",
+    "Ce que ton cerveau fait pendant que tu dors",
+    "Pourquoi les génies pensent différemment",
+    "La vérité sur l'alimentation industrielle",
+    "Pourquoi nous ne sommes peut-être pas seuls dans l'univers",
+    "Comment fonctionne vraiment l'argent - le système caché",
   ];
-
   const topic = topics[Math.floor(Math.random() * topics.length)];
   console.log('Sujet: ' + topic);
 
-  const prompt = 'Tu es un créateur YouTube viral français. Ecris un script long format (5-10 minutes) sur: "' + topic + '". STRUCTURE: 20 blocs minimum. Chaque bloc = 2-3 phrases parlées max 35 mots. Suspense entre blocs. Chiffres et faits reels. Reponds UNIQUEMENT avec ce JSON valide sans markdown: {"title":"titre YouTube max 60 caracteres","description":"description 150 mots","blocks":["bloc1","bloc2","bloc3"...],"imagePrompts":["description visuelle cinematique en anglais",...]}. Minimum 20 blocs obligatoire.';
+  const prompt = `Tu es un createur YouTube viral francais. Ecris un script sur: "${topic}". 8 blocs. Chaque bloc = 2 phrases max 30 mots. Captivant et mysterieux. Reponds UNIQUEMENT avec ce JSON sans markdown: {"title":"titre max 60 chars","description":"description 100 mots","blocks":["bloc1","bloc2","bloc3","bloc4","bloc5","bloc6","bloc7","bloc8"],"imagePrompts":["english visual 1","english visual 2","english visual 3","english visual 4","english visual 5","english visual 6","english visual 7","english visual 8"]}`;
 
-  const encoded = encodeURIComponent(prompt);
   const seed = Math.floor(Math.random() * 99999);
-  const url = 'https://text.pollinations.ai/' + encoded + '?model=openai&seed=' + seed;
+  const url = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=openai&seed=${seed}`;
 
-  return new Promise((resolve, reject) => {
-    https.get(url, res => {
+  return new Promise((resolve) => {
+    const req = https.get(url, res => {
       let data = '';
       res.on('data', d => data += d);
       res.on('end', () => {
         try {
-          let clean = data.trim();
-          if (clean.startsWith('```')) {
-            clean = clean.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-          }
-          // Trouver le JSON dans la réponse
-          const jsonStart = clean.indexOf('{');
-          const jsonEnd = clean.lastIndexOf('}');
-          if (jsonStart !== -1 && jsonEnd !== -1) {
-            clean = clean.substring(jsonStart, jsonEnd + 1);
-          }
-          const content = JSON.parse(clean);
-          if (!content.blocks || content.blocks.length < 3) {
-            // Script de secours si Pollinations échoue
-            resolve({
-              title: "Les Secrets Cachés Que la Science Vient de Révéler",
-              description: "Découvrez les vérités cachées sur notre univers.",
-              blocks: [
-                "Et si tout ce que tu croyais savoir était faux? Les scientifiques viennent de faire une découverte qui change tout.",
-                "Depuis des décennies, certaines informations sont gardées secrètes. Aujourd'hui, on lève le voile sur la vérité.",
-                "En 1969, des chercheurs ont découvert quelque chose d'extraordinaire. Mais personne n'en a parlé pendant 50 ans.",
-                "Le cerveau humain peut traiter 11 millions de bits par seconde. Mais on n'en utilise consciemment que 50.",
-                "Dans les profondeurs de l'océan, à 11 kilomètres de profondeur, vivent des créatures que la science ne comprend pas encore.",
-                "Les grandes entreprises dépensent des milliards pour que tu ne saches pas ça. Voici pourquoi.",
-                "Des études menées sur 50 000 personnes montrent que notre réalité est bien plus étrange qu'on ne le croit.",
-                "Mais attends... ce n'est que le début. Ce qui suit va vraiment te surprendre.",
-                "En 2019, la NASA a détecté un signal inexpliqué venant du bord de notre galaxie. Il se répète toutes les 16 jours.",
-                "Les physiciens quantiques affirment maintenant que le temps n'existe peut-être pas vraiment. Tu es prêt pour ça?",
-                "Et là, c'est là que tout bascule. Ce que personne ne te dit c'est que nous sommes peut-être dans une simulation.",
-                "Elon Musk, Neil deGrasse Tyson, et des dizaines de Prix Nobel pensent que c'est possible. Vraiment possible.",
-                "Les preuves s'accumulent depuis 20 ans. Des patterns mathématiques parfaits dans les lois de la physique.",
-                "Mais si c'est une simulation, qui l'a créée? Et surtout... pourquoi? La réponse va te glacer le sang.",
-                "Des chercheurs de l'université d'Oxford ont publié un papier en 2023. Ils donnent 50% de chances que ce soit réel.",
-                "Ce que tu viens d'apprendre aujourd'hui n'est que la surface. La vérité est bien plus profonde.",
-                "La question n'est plus de savoir si c'est possible. La question est: qu'est-ce que tu vas faire avec cette information?",
-                "Notre génération est la première à avoir accès à ces vérités. C'est une responsabilité immense.",
-                "Si cette vidéo t'a ouvert les yeux, partage-la. Les gens ont le droit de savoir.",
-                "Abonne-toi pour ne rien manquer. Chaque semaine, on explore une nouvelle vérité cachée ensemble."
-              ],
-              imagePrompts: Array(20).fill("cinematic space galaxy stars dramatic lighting 8K ultra realistic")
-            });
-          } else {
-            console.log('Script OK: "' + content.title + '" - ' + content.blocks.length + ' blocs');
-            resolve(content);
-          }
-        } catch (e) {
-          reject(new Error('Erreur parsing: ' + data.substring(0, 200)));
+          const s = data.indexOf('{');
+          const e = data.lastIndexOf('}');
+          if (s === -1) throw new Error('No JSON');
+          const parsed = JSON.parse(data.substring(s, e + 1));
+          if (!parsed.blocks || parsed.blocks.length < 3) throw new Error('Too short');
+          console.log('Script: ' + parsed.title);
+          resolve(parsed);
+        } catch (err) {
+          console.log('Fallback script');
+          resolve(FALLBACK);
         }
       });
-    }).on('error', reject);
+    });
+    req.on('error', () => resolve(FALLBACK));
+    req.setTimeout(30000, () => { req.destroy(); resolve(FALLBACK); });
   });
 }
 
-
-// ─── Génération voix Google TTS (gratuit) ────────────────────────────────────
 async function generateVoice(text, index) {
-  const dest = `/tmp/voice_${index}.mp3`;
-  const encoded = encodeURIComponent(text.substring(0, 200));
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=fr&client=tw-ob`;
-
+  const mp3 = `/tmp/v_${index}.mp3`;
+  const wav = `/tmp/v_${index}.wav`;
+  const payload = JSON.stringify({
+    text: text.substring(0, 400),
+    model_id: 'eleven_multilingual_v2',
+    voice_settings: { stability: 0.5, similarity_boost: 0.8 }
+  });
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        https.get(res.headers.location, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res2 => {
-          const chunks = [];
-          res2.on('data', d => chunks.push(d));
-          res2.on('end', () => { fs.writeFileSync(dest, Buffer.concat(chunks)); resolve(dest); });
-        }).on('error', reject);
-      } else {
-        const chunks = [];
-        res.on('data', d => chunks.push(d));
-        res.on('end', () => { fs.writeFileSync(dest, Buffer.concat(chunks)); resolve(dest); });
-      }
-    }).on('error', reject);
+    const req = https.request({
+      hostname: 'api.elevenlabs.io',
+      path: `/v1/text-to-speech/${ELEVEN_VOICE}`,
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': ELEVEN_KEY,
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 30000
+    }, res => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => {
+        try {
+          fs.writeFileSync(mp3, Buffer.concat(chunks));
+          execSync(`ffmpeg -y -i "${mp3}" -ar 44100 -ac 1 "${wav}" 2>/dev/null`);
+          resolve(wav);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+    req.write(payload);
+    req.end();
   });
 }
 
-// ─── Création vidéo simplifiée et robuste avec FFmpeg ────────────────────────
-async function buildCinematicVideo(images, voices, blocks, title) {
-  const outputPath = '/tmp/final_video.mp4';
-  const concatList = '/tmp/concat.txt';
-  const segmentPaths = [];
-
-  console.log('🎬 Construction des segments...');
-
+async function buildVideo(images, voices, blocks) {
+  const segs = [];
   for (let i = 0; i < blocks.length; i++) {
-    const img = images[i] || images[images.length - 1];
-    const voice = voices[i] || voices[voices.length - 1];
-    const segOut = `/tmp/seg_${i}.mp4`;
-
-    // Durée audio
-    let audioDuration = 5;
+    const img = images[i] || images[0];
+    const audio = voices[i] || voices[0];
+    const out = `/tmp/seg_${i}.mp4`;
+    let dur = 5;
     try {
-      const dur = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${voice}"`).toString().trim();
-      audioDuration = Math.max(3, parseFloat(dur) + 0.3);
+      dur = Math.max(3, parseFloat(execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audio}"`).toString().trim()) + 0.2);
     } catch (e) {}
-
-    // Texte sécurisé
-    const safeText = blocks[i]
-      .replace(/\\/g, '')
-      .replace(/'/g, ' ')
-      .replace(/"/g, ' ')
-      .replace(/:/g, ' ')
-      .replace(/\[/g, '(')
-      .replace(/\]/g, ')')
-      .substring(0, 80);
-
-    // Commande FFmpeg simple et robuste
-    const frames = Math.ceil(audioDuration * 25);
-    const ffmpegCmd = `ffmpeg -y -loop 1 -i "${img}" -i "${voice}" -filter_complex "[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0005,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=25,drawbox=x=0:y=850:w=1920:h=230:color=black@0.6:t=fill,drawtext=text='${safeText}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=880:shadowcolor=black:shadowx=2:shadowy=2[v]" -map "[v]" -map 1:a -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -pix_fmt yuv420p -t ${audioDuration} "${segOut}"`;
-
+    const txt = blocks[i].replace(/['"\\:\[\]{}|<>]/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 55);
+    const frames = Math.ceil(dur * 25);
+    const cmd = `ffmpeg -y -loop 1 -t ${dur} -i "${img}" -i "${audio}" -filter_complex "[0:v]scale=1920:1080,zoompan=z='min(zoom+0.0004,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=25,drawbox=x=0:y=900:w=iw:h=180:color=black@0.65:t=fill,drawtext=text='${txt}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=935:shadowcolor=black@0.9:shadowx=2:shadowy=2[v]" -map "[v]" -map 1:a -c:v libx264 -preset ultrafast -crf 24 -c:a aac -b:a 96k -pix_fmt yuv420p -shortest "${out}"`;
     try {
-      execSync(ffmpegCmd, { stdio: 'pipe', timeout: 120000 });
-      segmentPaths.push(segOut);
-      console.log(`✅ Segment ${i + 1}/${blocks.length}`);
+      execSync(cmd, { stdio: 'pipe', timeout: 90000 });
+      segs.push(out);
+      console.log(`Seg ${i + 1} OK`);
     } catch (e) {
-      console.error(`❌ Segment ${i} raté: ${e.stderr ? e.stderr.toString().substring(0, 100) : e.message}`);
+      console.error(`Seg ${i} raté`);
     }
   }
-
-  if (segmentPaths.length === 0) throw new Error('Aucun segment créé');
-
-  // Concaténation finale
-  const concatContent = segmentPaths.map(p => `file '${p}'`).join('\n');
-  fs.writeFileSync(concatList, concatContent);
-
-  console.log(`🎞️ Assemblage de ${segmentPaths.length} segments...`);
-  execSync(`ffmpeg -y -f concat -safe 0 -i "${concatList}" -c:v libx264 -preset ultrafast -crf 22 -c:a aac -b:a 128k -pix_fmt yuv420p -movflags +faststart "${outputPath}"`, { stdio: 'pipe', timeout: 300000 });
-
-  segmentPaths.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
-  console.log('✅ Vidéo assemblée !');
-  return outputPath;
+  if (segs.length === 0) throw new Error('Aucun segment');
+  const list = '/tmp/list.txt';
+  fs.writeFileSync(list, segs.map(s => `file '${s}'`).join('\n'));
+  const final = '/tmp/video.mp4';
+  execSync(`ffmpeg -y -f concat -safe 0 -i "${list}" -c copy -movflags +faststart "${final}"`, { stdio: 'pipe', timeout: 180000 });
+  segs.forEach(s => { try { fs.unlinkSync(s); } catch (e) {} });
+  return final;
 }
-// ─── Upload YouTube ───────────────────────────────────────────────────────────
-async function uploadToYouTube(videoPath, title, description) {
+
+async function uploadYouTube(videoPath, title, description) {
   const auth = getOAuth2Client();
   auth.setCredentials(savedToken);
-
-  const youtube = google.youtube({ version: 'v3', auth });
-
-  const res = await youtube.videos.insert({
+  const yt = google.youtube({ version: 'v3', auth });
+  const res = await yt.videos.insert({
     part: 'snippet,status',
     requestBody: {
       snippet: {
-        title: title,
-        description: description || `🔥 ${title}\n\n✨ Découvrez les secrets les mieux gardés.\n#viral #incroyable #découverte #science #vérité`,
-        tags: ['viral', 'incroyable', 'science', 'découverte', 'France', 'vérité', 'secrets', 'documentaire'],
+        title,
+        description: description || `${title}\n\n#viral #découverte #science #France`,
+        tags: ['viral', 'science', 'découverte', 'France', 'incroyable'],
         categoryId: '28',
         defaultLanguage: 'fr'
       },
       status: { privacyStatus: 'public' }
     },
-    media: {
-      body: fs.createReadStream(videoPath)
-    }
+    media: { body: fs.createReadStream(videoPath) }
   });
-
   return res.data;
 }
 
-// ─── Génération complète ──────────────────────────────────────────────────────
-async function generateAndPublish() {
-  console.log('\n🚀 ===== DÉMARRAGE GÉNÉRATION VIDÉO CINÉMATIQUE =====\n');
-
-  // 1. Script
-  console.log('📝 Génération du script...');
+async function run() {
+  console.log('=== START ===');
   const script = await generateScript();
-  const { title, description } = script;
   const blocks = script.blocks.slice(0, 8);
-  const imagePrompts = (script.imagePrompts || []).slice(0, 8);
-  console.log('Titre: ' + title);
-  console.log('Blocs: ' + blocks.length);
+  const prompts = (script.imagePrompts || []).slice(0, 8);
 
-  // 2. Images en parallèle (max 8)
-  console.log('Generation images...');
-  const imagePromises = blocks.map((_, i) => {
-    const prompt = imagePrompts[i] || 'cinematic dramatic landscape 8K';
-    return generateImage(prompt, i).catch(e => {
-      console.error('Image ' + i + ' failed:', e.message);
-      return null;
-    });
-  });
-  const images = (await Promise.all(imagePromises)).filter(Boolean);
-  console.log(images.length + ' images generees');
+  const imgResults = await Promise.all(
+    blocks.map((_, i) => generateImage(prompts[i] || 'cinematic landscape dramatic 8K', i).catch(e => { console.error('img ' + i + ':', e.message); return null; }))
+  );
+  const images = imgResults.filter(Boolean);
+  if (images.length === 0) throw new Error('Aucune image');
 
-  // 3. Voix sequentielles
-  console.log('Generation voix...');
   const voices = [];
   for (let i = 0; i < blocks.length; i++) {
-    try {
-      const v = await generateVoice(blocks[i], i);
-      voices.push(v);
-      console.log(`✅ Voix ${i + 1}/${blocks.length}`);
-    } catch (e) {
-      console.error(`❌ Voix ${i}:`, e.message);
-    }
+    try { voices.push(await generateVoice(blocks[i], i)); console.log(`Voix ${i + 1} OK`); }
+    catch (e) { console.error(`Voix ${i}:`, e.message); }
   }
+  if (voices.length === 0) throw new Error('Aucune voix');
 
-  if (voices.length === 0) throw new Error('Aucune voix générée');
-  if (images.length === 0) throw new Error('Aucune image générée');
-
-  // 4. Montage vidéo cinématique
-  console.log('\n🎬 Montage cinématique...');
-  const videoPath = await buildCinematicVideo(images, voices, blocks, title);
-
-  // 5. Upload YouTube
-  console.log('\n📤 Upload sur YouTube...');
-  const result = await uploadToYouTube(videoPath, title, description);
-  console.log(`\n🎉 VIDÉO PUBLIÉE: https://youtube.com/watch?v=${result.id}`);
-
-  // Nettoyage
-  try { fs.unlinkSync(videoPath); } catch (e) {}
-  images.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
-  voices.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
-
+  const videoPath = await buildVideo(images, voices, blocks.slice(0, voices.length));
+  const result = await uploadYouTube(videoPath, script.title, script.description);
+  console.log('PUBLIE: https://youtube.com/watch?v=' + result.id);
+  [videoPath, ...images, ...voices].forEach(f => { try { fs.unlinkSync(f); } catch (e) {} });
   return result;
 }
 
-// ─── Serveur HTTP ─────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  const path_ = url.pathname;
+  const p = url.pathname;
 
-  if (path_ === '/') {
+  if (p === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>🦑 KRAKEN – Bot YouTube Cinématique</title>
-        <meta charset="utf-8">
-        <style>
-          body { font-family: sans-serif; background: #0a0a0a; color: #fff; padding: 40px; text-align: center; }
-          h1 { font-size: 2.5em; color: #ff6b35; }
-          .btn { display: inline-block; margin: 10px; padding: 15px 30px; background: #ff6b35; 
-                 color: #fff; text-decoration: none; border-radius: 8px; font-size: 1.1em; font-weight: bold; }
-          .btn:hover { background: #e55a25; }
-          .status { margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 8px; }
-        </style>
-      </head>
-      <body>
-        <h1>🦑 KRAKEN</h1>
-        <p style="color:#aaa">Bot YouTube – Vidéos Cinématiques Automatiques</p>
-        <div class="status">
-          <p>Statut YouTube: <strong style="color:${savedToken ? '#4ade80' : '#f87171'}">${savedToken ? '✅ Connecté' : '❌ Non connecté'}</strong></p>
-        </div>
-        <br>
-        <a class="btn" href="/auth">🔗 Connecter YouTube</a>
-        <a class="btn" href="/publish">🎬 Générer & Publier</a>
-        <a class="btn" href="/status">📊 Statut</a>
-      </body>
-      </html>
-    `);
+    res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>KRAKEN</title>
+<style>body{font-family:sans-serif;background:#0a0a0a;color:#fff;padding:40px;text-align:center}
+h1{font-size:2.5em;color:#ff6b35}.btn{display:inline-block;margin:10px;padding:15px 30px;background:#ff6b35;color:#fff;text-decoration:none;border-radius:8px;font-size:1.1em;font-weight:bold}
+.s{margin-top:20px;padding:15px;background:#1a1a1a;border-radius:8px}</style></head>
+<body><h1>🦑 KRAKEN</h1><p style="color:#aaa">Bot YouTube Automatique</p>
+<div class="s"><p>YouTube: <strong style="color:${savedToken ? '#4ade80' : '#f87171'}">${savedToken ? '✅ Connecté' : '❌ Non connecté'}</strong></p></div><br>
+<a class="btn" href="/auth">🔗 Connecter YouTube</a>
+<a class="btn" href="/publish">🎬 Générer & Publier</a>
+<a class="btn" href="/status">📊 Statut</a></body></html>`);
 
-  } else if (path_ === '/auth') {
+  } else if (p === '/auth') {
     const auth = getOAuth2Client();
-    const authUrl = auth.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/youtube.upload'],
-      prompt: 'consent'
-    });
-    res.writeHead(302, { Location: authUrl });
+    res.writeHead(302, { Location: auth.generateAuthUrl({ access_type: 'offline', scope: ['https://www.googleapis.com/auth/youtube.upload'], prompt: 'consent' }) });
     res.end();
 
-  } else if (path_ === '/oauth2callback' || path_ === '/callback') {
+  } else if (p === '/oauth2callback' || p === '/callback') {
     const code = url.searchParams.get('code');
     if (!code) { res.writeHead(400); res.end('Code manquant'); return; }
-    
     const auth = getOAuth2Client();
     const { tokens } = await auth.getToken(code);
     savedToken = tokens;
-
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`
-      <html><body style="font-family:sans-serif;background:#0a0a0a;color:#fff;padding:40px;text-align:center">
-      <h1>✅ YouTube connecté !</h1>
-      <p style="color:#4ade80">Token enregistré en mémoire.</p>
-      <p style="color:#aaa">Ajoute ce token dans Railway Variables → YOUTUBE_TOKEN :</p>
-      <textarea style="width:90%;height:100px;background:#1a1a1a;color:#fff;padding:10px;border:1px solid #333;border-radius:8px">${JSON.stringify(tokens)}</textarea>
-      <br><br>
-      <a href="/publish" style="padding:15px 30px;background:#ff6b35;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">🎬 Générer une vidéo maintenant</a>
-      </body></html>
-    `);
+    res.end(`<html><body style="font-family:sans-serif;background:#0a0a0a;color:#fff;padding:40px;text-align:center">
+<h1>✅ Connecté !</h1><p style="color:#aaa">Copie dans Railway → YOUTUBE_TOKEN :</p>
+<textarea style="width:90%;height:120px;background:#1a1a1a;color:#4ade80;padding:10px;border:1px solid #333;border-radius:8px">${JSON.stringify(tokens)}</textarea>
+<br><br><a href="/publish" style="padding:15px 30px;background:#ff6b35;color:#fff;text-decoration:none;border-radius:8px">🎬 Générer</a></body></html>`);
 
-  } else if (path_ === '/publish') {
-    if (!savedToken) {
-      res.writeHead(302, { Location: '/auth' });
-      res.end();
-      return;
-    }
-
+  } else if (p === '/publish') {
+    if (!savedToken) { res.writeHead(302, { Location: '/auth' }); res.end(); return; }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.write(`
-      <html><head><meta charset="utf-8"><title>Génération en cours...</title>
-      <style>body{font-family:sans-serif;background:#0a0a0a;color:#fff;padding:40px}
-      h1{color:#ff6b35}.log{background:#1a1a1a;padding:20px;border-radius:8px;
-      font-family:monospace;white-space:pre-wrap;line-height:1.6}</style></head>
-      <body><h1>🎬 Génération de ta vidéo cinématique...</h1>
-      <div class="log" id="log">Démarrage...\n</div>
-      <script>setTimeout(()=>location.reload(),120000)</script>
-    `);
-
+    res.write(`<html><head><meta charset="utf-8"><title>Génération...</title>
+<style>body{font-family:sans-serif;background:#0a0a0a;color:#fff;padding:40px}h1{color:#ff6b35}</style></head>
+<body><h1>🎬 Génération en cours...</h1><p style="color:#aaa">Patiente 5-10 minutes.</p>`);
     try {
-      const result = await generateAndPublish();
-      res.end(`
-        <h2 style="color:#4ade80">🎉 Vidéo publiée avec succès !</h2>
-        <p>Titre: <strong>${result.snippet?.title || 'Vidéo'}</strong></p>
-        <a href="https://youtube.com/watch?v=${result.id}" target="_blank" 
-           style="padding:15px 30px;background:#ff6b35;color:#fff;text-decoration:none;border-radius:8px">
-          ▶️ Voir sur YouTube
-        </a>
-        <br><br>
-        <a href="/publish" style="color:#aaa">🔄 Générer une autre vidéo</a>
-        </body></html>
-      `);
+      const result = await run();
+      res.end(`<h2 style="color:#4ade80">🎉 Publiée !</h2>
+<a href="https://youtube.com/watch?v=${result.id}" target="_blank" style="padding:15px 30px;background:#ff6b35;color:#fff;text-decoration:none;border-radius:8px">▶️ Voir sur YouTube</a>
+<br><br><a href="/publish" style="color:#aaa">🔄 Encore une</a></body></html>`);
     } catch (e) {
-      res.end(`<h2 style="color:#f87171">❌ Erreur: ${e.message}</h2>
-        <a href="/" style="color:#ff6b35">← Retour</a></body></html>`);
+      res.end(`<h2 style="color:#f87171">❌ ${e.message}</h2><a href="/" style="color:#ff6b35">← Retour</a></body></html>`);
     }
 
-  } else if (path_ === '/status') {
+  } else if (p === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      connecte: !!savedToken,
-      tokenExpiry: savedToken?.expiry_date ? new Date(savedToken.expiry_date).toISOString() : null,
-      ffmpeg: (() => { try { execSync('which ffmpeg'); return '✅ Installé'; } catch (e) { return '❌ Absent'; } })()
-    }));
+    res.end(JSON.stringify({ connecte: !!savedToken, tokenExpiry: savedToken?.expiry_date ? new Date(savedToken.expiry_date).toISOString() : null, ffmpeg: (() => { try { execSync('which ffmpeg'); return 'OK'; } catch (e) { return 'ABSENT'; } })() }));
 
   } else {
     res.writeHead(404);
@@ -424,8 +282,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`\n🦑 KRAKEN démarré sur le port ${PORT}`);
-  console.log(`YouTube: ${savedToken ? '✅ Connecté' : '❌ Non connecté'}`);
-  try { execSync('which ffmpeg'); console.log('FFmpeg: ✅ Installé'); }
-  catch (e) { console.log('FFmpeg: ❌ Non installé'); }
+  console.log(`KRAKEN port ${PORT}`);
+  console.log(`YouTube: ${savedToken ? 'OK' : 'Non connecte'}`);
+  try { execSync('which ffmpeg'); console.log('FFmpeg: OK'); } catch (e) { console.log('FFmpeg: ABSENT'); }
 });
