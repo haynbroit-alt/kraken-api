@@ -6,11 +6,11 @@ const path = require('path');
 const { google } = require('googleapis');
 
 const PORT = process.env.PORT || 3000;
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
+const CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET;
+const REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || process.env.REDIRECT_URI;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
-const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY;
+const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_API_KEY;
 const ELEVEN_VOICE = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
 
 let savedToken = process.env.YOUTUBE_TOKEN ? JSON.parse(process.env.YOUTUBE_TOKEN) : null;
