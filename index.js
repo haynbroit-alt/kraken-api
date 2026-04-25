@@ -177,138 +177,62 @@ async function generateVoice(text, index) {
   });
 }
 
-// ─── Création vidéo spectaculaire avec FFmpeg ─────────────────────────────────
+// ─── Création vidéo simplifiée et robuste avec FFmpeg ────────────────────────
 async function buildCinematicVideo(images, voices, blocks, title) {
   const outputPath = '/tmp/final_video.mp4';
   const concatList = '/tmp/concat.txt';
   const segmentPaths = [];
 
-  console.log('🎬 Construction des segments vidéo cinématiques...');
+  console.log('🎬 Construction des segments...');
 
   for (let i = 0; i < blocks.length; i++) {
     const img = images[i] || images[images.length - 1];
     const voice = voices[i] || voices[voices.length - 1];
-    const text = blocks[i];
     const segOut = `/tmp/seg_${i}.mp4`;
 
-    // Obtenir durée de l'audio
-    let audioDuration = 4;
+    // Durée audio
+    let audioDuration = 5;
     try {
       const dur = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${voice}"`).toString().trim();
-      audioDuration = parseFloat(dur) + 0.5;
+      audioDuration = Math.max(3, parseFloat(dur) + 0.3);
     } catch (e) {}
 
-    // Texte stylisé avec fond semi-transparent
-    const safeText = text.replace(/'/g, "\\'").replace(/:/g, "\\:").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+    // Texte sécurisé
+    const safeText = blocks[i]
+      .replace(/\\/g, '')
+      .replace(/'/g, ' ')
+      .replace(/"/g, ' ')
+      .replace(/:/g, ' ')
+      .replace(/\[/g, '(')
+      .replace(/\]/g, ')')
+      .substring(0, 80);
 
-    // Effet Ken Burns (zoom progressif) + texte animé
-    const zoomDirection = i % 2 === 0 ? 1.003 : 0.997; // zoom in / zoom out alternés
-    const panX = i % 3 === 0 ? '0' : i % 3 === 1 ? 'iw*0.02*on/25' : '-iw*0.02*on/25';
-
-    const ffmpegCmd = [
-      'ffmpeg -y',
-      `-loop 1 -i "${img}"`,
-      `-i "${voice}"`,
-      `-filter_complex "`,
-      // Zoom Ken Burns fluide
-      `[0:v]scale=2160:1215,`,
-      `zoompan=z='min(zoom+0.0008,1.4)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${Math.ceil(audioDuration * 25)}:s=1920x1080:fps=25,`,
-      // Ajout d'une légère vignette (assombrit les bords)
-      `vignette=PI/5,`,
-      // Fade in/out de la vidéo
-      `fade=t=in:st=0:d=0.4,fade=t=out:st=${audioDuration - 0.4}:d=0.4[video];`,
-      // Fond texte : rectangle noir semi-transparent en bas
-      `[video]drawbox=x=0:y=ih*0.72:w=iw:h=ih*0.28:color=black@0.55:t=fill,`,
-      // Texte principal : blanc, gras, centré en bas
-      `drawtext=text='${safeText}':`,
-      `fontsize=52:fontcolor=white:`,
-      `font='DejaVu Sans Bold':`,
-      `x=(w-text_w)/2:y=h*0.76:`,
-      `shadowcolor=black@0.8:shadowx=2:shadowy=2:`,
-      `alpha='if(lt(t,0.3),t/0.3,if(gt(t,${audioDuration - 0.3}),(${audioDuration}-t)/0.3,1))'[outv]`,
-      `"`,
-      `-map "[outv]" -map 1:a`,
-      `-c:v libx264 -preset fast -crf 18`,
-      `-c:a aac -b:a 192k`,
-      `-pix_fmt yuv420p`,
-      `-t ${audioDuration}`,
-      `"${segOut}"`
-    ].join(' ');
+    // Commande FFmpeg simple et robuste
+    const frames = Math.ceil(audioDuration * 25);
+    const ffmpegCmd = `ffmpeg -y -loop 1 -i "${img}" -i "${voice}" -filter_complex "[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z='min(zoom+0.0005,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=25,drawbox=x=0:y=850:w=1920:h=230:color=black@0.6:t=fill,drawtext=text='${safeText}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=880:shadowcolor=black:shadowx=2:shadowy=2[v]" -map "[v]" -map 1:a -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -pix_fmt yuv420p -t ${audioDuration} "${segOut}"`;
 
     try {
-      execSync(ffmpegCmd, { stdio: 'pipe' });
+      execSync(ffmpegCmd, { stdio: 'pipe', timeout: 120000 });
       segmentPaths.push(segOut);
-      console.log(`✅ Segment ${i + 1}/${blocks.length} créé (${audioDuration.toFixed(1)}s)`);
+      console.log(`✅ Segment ${i + 1}/${blocks.length}`);
     } catch (e) {
-      console.error(`❌ Erreur segment ${i}: ${e.message}`);
+      console.error(`❌ Segment ${i} raté: ${e.stderr ? e.stderr.toString().substring(0, 100) : e.message}`);
     }
   }
 
   if (segmentPaths.length === 0) throw new Error('Aucun segment créé');
 
-  // Concaténation avec transitions
+  // Concaténation finale
   const concatContent = segmentPaths.map(p => `file '${p}'`).join('\n');
   fs.writeFileSync(concatList, concatContent);
 
-  // Ajout musique de fond épique (loopée)
-  const musicUrl = 'https://files.freemusicarchive.org/storage-freemusicarchive-org/music/WFMU/Broke_For_Free/Directionless_EP/Broke_For_Free_-_01_-_Night_Owl.mp3';
-  const musicPath = '/tmp/music.mp3';
-  
-  let hasMusicFile = false;
-  if (fs.existsSync(musicPath)) {
-    hasMusicFile = true;
-  } else {
-    try {
-      await downloadImage(musicUrl, musicPath);
-      hasMusicFile = true;
-      console.log('🎵 Musique téléchargée');
-    } catch (e) {
-      console.log('⚠️ Musique non disponible, vidéo sans fond musical');
-    }
-  }
+  console.log(`🎞️ Assemblage de ${segmentPaths.length} segments...`);
+  execSync(`ffmpeg -y -f concat -safe 0 -i "${concatList}" -c:v libx264 -preset ultrafast -crf 22 -c:a aac -b:a 128k -pix_fmt yuv420p -movflags +faststart "${outputPath}"`, { stdio: 'pipe', timeout: 300000 });
 
-  // Assemblage final
-  console.log('🎞️ Assemblage final...');
-  
-  let finalCmd;
-  if (hasMusicFile) {
-    finalCmd = [
-      'ffmpeg -y',
-      `-f concat -safe 0 -i "${concatList}"`,
-      `-stream_loop -1 -i "${musicPath}"`,
-      `-filter_complex "`,
-      `[0:a]volume=1.0[voice];`,
-      `[1:a]volume=0.12,afade=t=in:st=0:d=1,afade=t=out:st=999:d=2[music];`,
-      `[voice][music]amix=inputs=2:duration=first[aout]`,
-      `"`,
-      `-map 0:v -map "[aout]"`,
-      `-c:v libx264 -preset fast -crf 17`,
-      `-c:a aac -b:a 192k`,
-      `-pix_fmt yuv420p`,
-      `-movflags +faststart`,
-      `"${outputPath}"`
-    ].join(' ');
-  } else {
-    finalCmd = [
-      'ffmpeg -y',
-      `-f concat -safe 0 -i "${concatList}"`,
-      `-c:v libx264 -preset fast -crf 17`,
-      `-c:a aac -b:a 192k`,
-      `-pix_fmt yuv420p`,
-      `-movflags +faststart`,
-      `"${outputPath}"`
-    ].join(' ');
-  }
-
-  execSync(finalCmd, { stdio: 'pipe' });
-  
-  // Nettoyage segments
   segmentPaths.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
-  
-  console.log('✅ Vidéo cinématique assemblée !');
+  console.log('✅ Vidéo assemblée !');
   return outputPath;
 }
-
 // ─── Upload YouTube ───────────────────────────────────────────────────────────
 async function uploadToYouTube(videoPath, title, description) {
   const auth = getOAuth2Client();
