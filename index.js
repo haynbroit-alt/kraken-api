@@ -55,7 +55,7 @@ async function generateImage(prompt, index) {
   return dest;
 }
 
-// ─── Génération script IA ─────────────────────────────────────────────────────
+// ─── Génération script via Pollinations AI (gratuit, sans clé) ───────────────
 async function generateScript() {
   const topics = [
     "Les secrets que la NASA cache sur ce qui se passe vraiment dans l'espace profond",
@@ -76,78 +76,45 @@ async function generateScript() {
   ];
 
   const topic = topics[Math.floor(Math.random() * topics.length)];
+  console.log('Sujet: ' + topic);
 
-  const payload = JSON.stringify({
-    model: 'gpt-4o-mini',
-    max_tokens: 4000,
-    messages: [{
-      role: 'system',
-      content: `Tu es un créateur de contenu YouTube viral français de haut niveau, 
-        spécialisé dans les vidéos longues format (5 à 10 minutes) qui génèrent des millions de vues.
-        
-        Tu crées des scripts LONGS, CAPTIVANTS, avec une narration cinématique.
-        
-        STRUCTURE OBLIGATOIRE (20 blocs minimum, idéalement 25) :
-        - Bloc 1-2 : ACCROCHE CHOC — une phrase qui cloue sur place, question provocante ou révélation stupéfiante
-        - Bloc 3-4 : PROMESSE — ce que le spectateur va découvrir, pourquoi c'est crucial
-        - Bloc 5-10 : DÉVELOPPEMENT 1 — premier axe, faits, anecdotes, chiffres surprenants
-        - Bloc 11-15 : DÉVELOPPEMENT 2 — deuxième révélation encore plus forte, retournement
-        - Bloc 16-19 : RÉVÉLATION FINALE — la vérité cachée, ce que personne ne dit
-        - Bloc 20+ : CONCLUSION — impact émotionnel, appel à l'action
-        
-        RÈGLES D'ÉCRITURE :
-        - Chaque bloc = 2 à 3 phrases naturelles, style parlé (pas écrit)
-        - Max 35 mots par bloc
-        - Utilise des transitions : "Mais attends...", "Et là, c'est là que tout bascule...", "Ce que personne ne te dit c'est que..."
-        - Crée du suspense entre chaque bloc
-        - Intègre des chiffres, dates, noms réels pour la crédibilité
-        - Ton : entre documentaire Arte et podcast viral
-        
-        Format JSON STRICT :
-        {
-          "title": "Titre accrocheur YouTube (max 60 caractères)",
-          "description": "Description YouTube 150 mots avec mots-clés",
-          "blocks": ["bloc1", "bloc2", ... 20 à 25 blocs],
-          "imagePrompts": ["prompt image cinématique 1", ... autant que de blocs, très descriptifs]
-        }
-        
-        Chaque imagePrompt doit être une description visuelle précise et cinématique en anglais.`
-    }, {
-      role: 'user',
-      content: `Écris un script YouTube long format viral (5-10 minutes) sur: ${topic}. 
-        Minimum 20 blocs. Rends-le captivant du début à la fin.`
-    }],
-    response_format: { type: 'json_object' }
-  });
+  const prompt = 'Tu es un créateur YouTube viral français. Ecris un script long format (5-10 minutes) sur: "' + topic + '". STRUCTURE: 20 blocs minimum. Chaque bloc = 2-3 phrases parlées max 35 mots. Suspense entre blocs. Chiffres et faits reels. Reponds UNIQUEMENT avec ce JSON valide sans markdown: {"title":"titre YouTube max 60 caracteres","description":"description 150 mots","blocks":["bloc1","bloc2","bloc3"...],"imagePrompts":["description visuelle cinematique en anglais",...]}. Minimum 20 blocs obligatoire.';
+
+  const encoded = encodeURIComponent(prompt);
+  const seed = Math.floor(Math.random() * 99999);
+  const url = 'https://text.pollinations.ai/' + encoded + '?model=openai&seed=' + seed;
 
   return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.openai.com',
-      path: '/v1/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_KEY}`,
-        'Content-Length': Buffer.byteLength(payload)
-      }
-    }, res => {
+    https.get(url, res => {
       let data = '';
       res.on('data', d => data += d);
       res.on('end', () => {
         try {
-          const json = JSON.parse(data);
-          const content = JSON.parse(json.choices[0].message.content);
-          resolve(content);
+          let clean = data.trim();
+          if (clean.startsWith('```')) {
+            clean = clean.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+          }
+          // Trouver le JSON dans la réponse
+          const jsonStart = clean.indexOf('{');
+          const jsonEnd = clean.lastIndexOf('}');
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            clean = clean.substring(jsonStart, jsonEnd + 1);
+          }
+          const content = JSON.parse(clean);
+          if (!content.blocks || content.blocks.length < 5) {
+            reject(new Error('Script trop court'));
+          } else {
+            console.log('Script OK: "' + content.title + '" - ' + content.blocks.length + ' blocs');
+            resolve(content);
+          }
         } catch (e) {
-          reject(new Error('Erreur script: ' + data));
+          reject(new Error('Erreur parsing: ' + data.substring(0, 200)));
         }
       });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
+    }).on('error', reject);
   });
 }
+
 
 // ─── Génération voix ElevenLabs ───────────────────────────────────────────────
 async function generateVoice(text, index) {
