@@ -443,7 +443,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(302, { Location: authUrl });
     res.end();
 
-  } else if (path_ === '/oauth2callback') {
+  } else if (path_ === '/oauth2callback' || path_ === '/callback') {
     const code = url.searchParams.get('code');
     if (!code) { res.writeHead(400); res.end('Code manquant'); return; }
     
