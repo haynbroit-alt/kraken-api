@@ -108,7 +108,33 @@ async function generateScript() {
   });
 }
 
-async function generateVoice(text, index) {
+async function generateVoiceGoogleTTS(text, index) {
+  const mp3 = `/tmp/v_${index}.mp3`;
+  const wav = `/tmp/v_${index}.wav`;
+  const encoded = encodeURIComponent(text.substring(0, 200));
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=fr&client=tw-ob&ttsspeed=0.9`;
+  return new Promise((resolve, reject) => {
+    const follow = (u) => {
+      https.get(u, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }, res => {
+        if ([301,302,303].includes(res.statusCode)) return follow(res.headers.location);
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => {
+          try {
+            fs.writeFileSync(mp3, Buffer.concat(chunks));
+            if (fs.statSync(mp3).size < 100) throw new Error('Audio vide');
+            execSync(`ffmpeg -y -i "${mp3}" -ar 44100 -ac 1 "${wav}" 2>/dev/null`);
+            resolve(wav);
+          } catch(e) { reject(e); }
+        });
+        res.on('error', reject);
+      }).on('error', reject);
+    };
+    follow(url);
+  });
+}
+
+async function generateVoiceElevenLabs(text, index) {
   const mp3 = `/tmp/v_${index}.mp3`;
   const wav = `/tmp/v_${index}.wav`;
   const payload = JSON.stringify({
@@ -133,7 +159,9 @@ async function generateVoice(text, index) {
       res.on('data', d => chunks.push(d));
       res.on('end', () => {
         try {
-          fs.writeFileSync(mp3, Buffer.concat(chunks));
+          const buf = Buffer.concat(chunks);
+          if (buf.length < 1000) throw new Error('Reponse ElevenLabs invalide');
+          fs.writeFileSync(mp3, buf);
           execSync(`ffmpeg -y -i "${mp3}" -ar 44100 -ac 1 "${wav}" 2>/dev/null`);
           resolve(wav);
         } catch (e) { reject(e); }
@@ -144,6 +172,22 @@ async function generateVoice(text, index) {
     req.write(payload);
     req.end();
   });
+}
+
+async function generateVoice(text, index) {
+  // Essaie ElevenLabs d'abord, puis Google TTS en secours
+  if (ELEVEN_KEY) {
+    try {
+      const v = await generateVoiceElevenLabs(text, index);
+      console.log('Voix ElevenLabs OK');
+      return v;
+    } catch (e) {
+      console.log('ElevenLabs echoue, bascule sur Google TTS: ' + e.message);
+    }
+  }
+  const v = await generateVoiceGoogleTTS(text, index);
+  console.log('Voix Google TTS OK');
+  return v;
 }
 
 async function buildVideo(images, voices, blocks) {
