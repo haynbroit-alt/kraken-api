@@ -101,7 +101,7 @@ async function generateScript() {
             clean = clean.substring(jsonStart, jsonEnd + 1);
           }
           const content = JSON.parse(clean);
-          if (!content.blocks || content.blocks.length < 5) {
+          if (!content.blocks || content.blocks.length < 3) {
             reject(new Error('Script trop court'));
           } else {
             console.log('Script OK: "' + content.title + '" - ' + content.blocks.length + ' blocs');
