@@ -611,4 +611,11 @@ const server = http.createServer(async (req, res) => {
 </body></html>`);
 });
 
-server.listen(PORT, () => console.log(`🦑 KRAKEN API démarré sur port ${PORT}`));
+// AUTO-PING toutes les 8 minutes pour garder Railway eveille
+setInterval(() => {
+  https.get('https://kraken-api-production.up.railway.app/status', res => {
+    console.log('Ping OK: ' + res.statusCode);
+  }).on('error', e => console.log('Ping erreur: ' + e.message));
+}, 8 * 60 * 1000);
+
+server.listen(PORT, () => console.log(`🦑 KRAKEN API demarré sur port ${PORT}`));
