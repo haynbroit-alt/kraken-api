@@ -158,25 +158,70 @@ async function generateScript(topic) {
 }
 
 // ─── IMAGE GENERATION ─────────────────────────────────────
-async function generateImage(prompt, index) {
+function downloadImage(imgUrl, imgPath, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const imgPath = `/tmp/img_${index}.jpg`;
-    const safePrompt = encodeURIComponent(`${prompt}, cinematic, 4K, dramatic lighting, ultra realistic`);
-    const imgUrl = `https://image.pollinations.ai/prompt/${safePrompt}?width=1280&height=720&nologo=true&seed=${index * 137}`;
     const file = fs.createWriteStream(imgPath);
-    https.get(imgUrl, res => {
-      res.pipe(file);
-      file.on('finish', () => {
-        file.close();
-        if (fs.existsSync(imgPath) && fs.statSync(imgPath).size > 5000) {
-          resolve(imgPath);
-        } else {
-          reject(new Error('Image trop petite'));
+    const timer = setTimeout(() => { file.destroy(); reject(new Error('Timeout')); }, timeoutMs);
+    const get = (u, depth) => {
+      if (depth > 3) return reject(new Error('Trop de redirections'));
+      const mod = u.startsWith('https') ? https : http;
+      mod.get(u, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return get(res.headers.location, depth + 1);
         }
-      });
-    }).on('error', reject);
-    setTimeout(() => reject(new Error('Timeout image')), 45000);
+        res.pipe(file);
+        file.on('finish', () => {
+          clearTimeout(timer);
+          file.close(() => {
+            if (fs.existsSync(imgPath) && fs.statSync(imgPath).size > 10000) {
+              resolve(imgPath);
+            } else {
+              reject(new Error('Image trop petite'));
+            }
+          });
+        });
+      }).on('error', e => { clearTimeout(timer); reject(e); });
+    };
+    get(imgUrl, 0);
   });
+}
+
+async function generateImage(prompt, index) {
+  const imgPath = `/tmp/img_${index}.jpg`;
+
+  // 1. Essai Pollinations (2 tentatives)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const safePrompt = encodeURIComponent(`${prompt}, cinematic 4K`);
+      const seed = index * 137 + attempt * 999;
+      const u = `https://image.pollinations.ai/prompt/${safePrompt}?width=1280&height=720&nologo=true&seed=${seed}`;
+      await downloadImage(u, imgPath, 40000);
+      console.log(`Image ${index} Pollinations OK`);
+      return imgPath;
+    } catch(e) {
+      console.log(`Image ${index} Pollinations tentative ${attempt+1} échouée: ${e.message}`);
+    }
+  }
+
+  // 2. Fallback Picsum (toujours disponible)
+  try {
+    const seed = (index * 37 + 100) % 1000;
+    const u = `https://picsum.photos/seed/${seed}/1280/720`;
+    await downloadImage(u, imgPath, 20000);
+    console.log(`Image ${index} Picsum OK`);
+    return imgPath;
+  } catch(e) {
+    console.log(`Image ${index} Picsum échouée: ${e.message}`);
+  }
+
+  // 3. Fallback ultime — image noire générée par FFmpeg
+  try {
+    execSync(`ffmpeg -y -f lavfi -i color=c=black:size=1280x720:rate=1 -frames:v 1 "${imgPath}" 2>/dev/null`);
+    console.log(`Image ${index} FFmpeg noir OK`);
+    return imgPath;
+  } catch(e) {
+    throw new Error(`Image ${index} totalement échouée`);
+  }
 }
 
 // ─── VOICE GENERATION (ElevenLabs → Google TTS) ───────────
@@ -239,12 +284,27 @@ async function generateVoiceGoogle(text, index) {
   });
 }
 
+async function generateVoiceSilence(text, index) {
+  // Fallback ultime : génère un silence de la durée estimée du texte
+  const wav = `/tmp/voice_${index}.wav`;
+  const words = text.split(' ').length;
+  const duration = Math.max(3, Math.round(words / 2.5)); // ~2.5 mots/sec
+  execSync(`ffmpeg -y -f lavfi -i aevalsrc=0:c=mono:s=44100 -t ${duration} "${wav}" 2>/dev/null`);
+  console.log(`Voix ${index} silence OK (${duration}s)`);
+  return wav;
+}
+
 async function generateVoice(text, index) {
+  // 1. ElevenLabs
   if (ELEVEN_KEY) {
     try { return await generateVoiceElevenLabs(text, index); }
     catch(e) { console.log(`ElevenLabs échoué bloc ${index}: ${e.message}`); }
   }
-  return await generateVoiceGoogle(text, index);
+  // 2. Google TTS
+  try { return await generateVoiceGoogle(text, index); }
+  catch(e) { console.log(`Google TTS échoué bloc ${index}: ${e.message}`); }
+  // 3. Silence FFmpeg — jamais d'échec
+  return await generateVoiceSilence(text, index);
 }
 
 // ─── VIDEO ASSEMBLY ───────────────────────────────────────
