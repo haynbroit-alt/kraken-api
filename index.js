@@ -357,17 +357,22 @@ async function run() {
   if (images.length === 0) throw new Error('Aucune image generee');
   console.log(images.length + ' images OK');
 
-  // 3. Voix pour chaque bloc
-  console.log('Generation voix...');
-  const voices = [];
-  for (let i = 0; i < blocks.length; i++) {
-    try {
-      voices.push(await generateVoice(blocks[i], i));
-      console.log('Voix ' + (i+1) + '/' + blocks.length + ' OK');
-    } catch(e) {
-      console.error('Voix ' + i + ' ratee: ' + e.message);
-    }
+  // 3. Voix en PARALLELE (5 a la fois)
+  console.log('Generation voix en parallele...');
+  const voiceResults = [];
+  const BATCH = 5;
+  for (let b = 0; b < blocks.length; b += BATCH) {
+    const batch = blocks.slice(b, b + BATCH);
+    const results = await Promise.all(
+      batch.map((txt, j) => generateVoice(txt, b + j).catch(e => {
+        console.error('Voix ' + (b+j) + ' ratee: ' + e.message);
+        return null;
+      }))
+    );
+    voiceResults.push(...results);
+    console.log('Batch voix ' + Math.min(b+BATCH, blocks.length) + '/' + blocks.length + ' OK');
   }
+  const voices = voiceResults.filter(Boolean);
   if (voices.length === 0) throw new Error('Aucune voix generee');
   console.log(voices.length + ' voix OK');
 
