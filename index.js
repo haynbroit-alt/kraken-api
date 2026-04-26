@@ -158,70 +158,25 @@ async function generateScript(topic) {
 }
 
 // ─── IMAGE GENERATION ─────────────────────────────────────
-function downloadImage(imgUrl, imgPath, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(imgPath);
-    const timer = setTimeout(() => { file.destroy(); reject(new Error('Timeout')); }, timeoutMs);
-    const get = (u, depth) => {
-      if (depth > 3) return reject(new Error('Trop de redirections'));
-      const mod = u.startsWith('https') ? https : http;
-      mod.get(u, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          return get(res.headers.location, depth + 1);
-        }
-        res.pipe(file);
-        file.on('finish', () => {
-          clearTimeout(timer);
-          file.close(() => {
-            if (fs.existsSync(imgPath) && fs.statSync(imgPath).size > 10000) {
-              resolve(imgPath);
-            } else {
-              reject(new Error('Image trop petite'));
-            }
-          });
-        });
-      }).on('error', e => { clearTimeout(timer); reject(e); });
-    };
-    get(imgUrl, 0);
-  });
-}
-
 async function generateImage(prompt, index) {
-  const imgPath = `/tmp/img_${index}.jpg`;
-
-  // 1. Essai Pollinations (2 tentatives)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const safePrompt = encodeURIComponent(`${prompt}, cinematic 4K`);
-      const seed = index * 137 + attempt * 999;
-      const u = `https://image.pollinations.ai/prompt/${safePrompt}?width=1280&height=720&nologo=true&seed=${seed}`;
-      await downloadImage(u, imgPath, 40000);
-      console.log(`Image ${index} Pollinations OK`);
-      return imgPath;
-    } catch(e) {
-      console.log(`Image ${index} Pollinations tentative ${attempt+1} échouée: ${e.message}`);
-    }
-  }
-
-  // 2. Fallback Picsum (toujours disponible)
-  try {
-    const seed = (index * 37 + 100) % 1000;
-    const u = `https://picsum.photos/seed/${seed}/1280/720`;
-    await downloadImage(u, imgPath, 20000);
-    console.log(`Image ${index} Picsum OK`);
-    return imgPath;
-  } catch(e) {
-    console.log(`Image ${index} Picsum échouée: ${e.message}`);
-  }
-
-  // 3. Fallback ultime — image noire générée par FFmpeg
-  try {
-    execSync(`ffmpeg -y -f lavfi -i color=c=black:size=1280x720:rate=1 -frames:v 1 "${imgPath}" 2>/dev/null`);
-    console.log(`Image ${index} FFmpeg noir OK`);
-    return imgPath;
-  } catch(e) {
-    throw new Error(`Image ${index} totalement échouée`);
-  }
+  return new Promise((resolve, reject) => {
+    const imgPath = `/tmp/img_${index}.jpg`;
+    const safePrompt = encodeURIComponent(`${prompt}, cinematic, 4K, dramatic lighting, ultra realistic`);
+    const imgUrl = `https://image.pollinations.ai/prompt/${safePrompt}?width=1280&height=720&nologo=true&seed=${index * 137}`;
+    const file = fs.createWriteStream(imgPath);
+    https.get(imgUrl, res => {
+      res.pipe(file);
+      file.on('finish', () => {
+        file.close();
+        if (fs.existsSync(imgPath) && fs.statSync(imgPath).size > 5000) {
+          resolve(imgPath);
+        } else {
+          reject(new Error('Image trop petite'));
+        }
+      });
+    }).on('error', reject);
+    setTimeout(() => reject(new Error('Timeout image')), 45000);
+  });
 }
 
 // ─── VOICE GENERATION (ElevenLabs → Google TTS) ───────────
@@ -284,27 +239,12 @@ async function generateVoiceGoogle(text, index) {
   });
 }
 
-async function generateVoiceSilence(text, index) {
-  // Fallback ultime : génère un silence de la durée estimée du texte
-  const wav = `/tmp/voice_${index}.wav`;
-  const words = text.split(' ').length;
-  const duration = Math.max(3, Math.round(words / 2.5)); // ~2.5 mots/sec
-  execSync(`ffmpeg -y -f lavfi -i aevalsrc=0:c=mono:s=44100 -t ${duration} "${wav}" 2>/dev/null`);
-  console.log(`Voix ${index} silence OK (${duration}s)`);
-  return wav;
-}
-
 async function generateVoice(text, index) {
-  // 1. ElevenLabs
   if (ELEVEN_KEY) {
     try { return await generateVoiceElevenLabs(text, index); }
     catch(e) { console.log(`ElevenLabs échoué bloc ${index}: ${e.message}`); }
   }
-  // 2. Google TTS
-  try { return await generateVoiceGoogle(text, index); }
-  catch(e) { console.log(`Google TTS échoué bloc ${index}: ${e.message}`); }
-  // 3. Silence FFmpeg — jamais d'échec
-  return await generateVoiceSilence(text, index);
+  return await generateVoiceGoogle(text, index);
 }
 
 // ─── VIDEO ASSEMBLY ───────────────────────────────────────
@@ -562,69 +502,4 @@ const server = http.createServer(async (req, res) => {
   <meta http-equiv="refresh" content="10">
   <title>Kraken Bot</title>
   <style>
-    body { font-family: sans-serif; background: #0a0a0f; color: #e8e0d0; text-align: center; padding: 40px; }
-    h1 { color: #ff6b35; }
-    .status { font-size: 1.3em; margin: 30px; padding: 20px; background: #1a1a2e; border-radius: 10px; }
-    a { color: #ff6b35; }
-    .done { color: #00ff88; font-size: 1.5em; }
-    .error { color: #ff4444; }
-  </style>
-</head>
-<body>
-  <h1>🦑 KRAKEN BOT</h1>
-  <div class="status">
-    ${jobStatus
-      ? jobStatus.status === 'done'
-        ? `<p class="done">✅ ${jobStatus.title}</p>
-           <p>Durée: ${jobStatus.duration} | Segments: ${jobStatus.segments}</p>
-           <p><a href="${jobStatus.url}" target="_blank">▶️ Voir sur YouTube</a></p>`
-        : jobStatus.status === 'error'
-        ? `<p class="error">${jobStatus.message}</p><p><a href="/publish">🔄 Réessayer</a></p>`
-        : `<p>⏳ ${jobStatus.message}</p><p style="color:#888;font-size:0.9em">La page se rafraîchit automatiquement toutes les 10 secondes...</p>`
-      : '<p>Aucun job en cours.</p>'
-    }
-  </div>
-  <p><a href="/">🏠 Accueil</a> | <a href="/status">📊 Statut JSON</a> | <a href="/auto">⏰ Mode auto</a></p>
-</body></html>`);
-  }
-
-  // ── Status JSON ──
-  if (p === '/status') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ connecte: !!token, jobRunning, jobStatus }));
-  }
-
-  // ── Auto (1 vidéo toutes les 24h) ──
-  if (p === '/auto') {
-    if (!token) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(`<h2>⚠️ Connecte YouTube d'abord</h2><a href="/auth">Se connecter</a>`);
-    }
-    setInterval(() => { if (!jobRunning) runPipeline(); }, 24 * 60 * 60 * 1000);
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(`<h2>✅ Mode auto activé !</h2><p>1 vidéo publiée toutes les 24h.</p><a href="/publish">Publier maintenant</a>`);
-  }
-
-  // ── Accueil ──
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(`<!DOCTYPE html><html>
-<head><meta charset="utf-8"><title>Kraken Bot</title>
-<style>
-  body { font-family: sans-serif; background: #0a0a0f; color: #e8e0d0; text-align: center; padding: 60px; }
-  h1 { color: #ff6b35; font-size: 3em; margin-bottom: 10px; }
-  a { display: block; margin: 15px auto; width: 280px; padding: 15px; background: #1a1a2e;
-      border: 2px solid #ff6b35; border-radius: 10px; color: #e8e0d0; text-decoration: none; font-size: 1.1em; }
-  a:hover { background: #ff6b35; color: #000; }
-  .status { color: ${token ? '#00ff88' : '#ff4444'}; margin-bottom: 20px; }
-</style></head>
-<body>
-  <h1>🦑 KRAKEN BOT</h1>
-  <p class="status">${token ? '✅ YouTube connecté' : '⚠️ YouTube non connecté'}</p>
-  <a href="/auth">🔑 1. Connecter YouTube</a>
-  <a href="/publish">🚀 2. Publier une vidéo</a>
-  <a href="/auto">⏰ 3. Mode automatique (24h)</a>
-  <a href="/status">📊 Statut</a>
-</body></html>`);
-});
-
-server.listen(PORT, () => console.log(`🦑 KRAKEN API démarré sur port ${PORT}`));
+    body { font-family: sans-serif; background: #0a
