@@ -141,73 +141,26 @@ async function generateScript(topic) {
   }
 }
 
-// ─── IMAGE GENERATION ─────────────────────────────────────
-function downloadImage(imgUrl, imgPath, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(imgPath);
-    const timer = setTimeout(() => { file.destroy(); reject(new Error('Timeout')); }, timeoutMs);
-    const get = (u, depth) => {
-      if (depth > 3) return reject(new Error('Trop de redirections'));
-      const mod = u.startsWith('https') ? https : http;
-      mod.get(u, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          return get(res.headers.location, depth + 1);
-        }
-        res.pipe(file);
-        file.on('finish', () => {
-          clearTimeout(timer);
-          file.close(() => {
-            if (fs.existsSync(imgPath) && fs.statSync(imgPath).size > 10000) {
-              resolve(imgPath);
-            } else {
-              reject(new Error('Image trop petite'));
-            }
-          });
-        });
-      }).on('error', e => { clearTimeout(timer); reject(e); });
-    };
-    get(imgUrl, 0);
-  });
-}
+// ─── IMAGE GENERATION (100% FFmpeg local, zero réseau) ────
+const COLORS = ['1a1a2e','16213e','0f3460','1b1b2f','2d132c','1a0a2e','0d1b2a','1c2541','2e4057','3b1f2b'];
 
 async function generateImage(prompt, index) {
   const imgPath = `/tmp/img_${index}.jpg`;
-
-  // 1. Essai Pollinations (2 tentatives)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const safePrompt = encodeURIComponent(`${prompt}, cinematic 4K`);
-      const seed = index * 137 + attempt * 999;
-      const u = `https://image.pollinations.ai/prompt/${safePrompt}?width=1280&height=720&nologo=true&seed=${seed}`;
-      await downloadImage(u, imgPath, 40000);
-      console.log(`Image ${index} Pollinations OK`);
-      return imgPath;
-    } catch(e) {
-      console.log(`Image ${index} Pollinations tentative ${attempt+1} échouée: ${e.message}`);
-    }
-  }
-
-  // 2. Fallback Picsum (toujours disponible)
+  const color = COLORS[index % COLORS.length];
+  const text = prompt.slice(0, 50).replace(/[\'"\\:]/g, ' ');
   try {
-    const seed = (index * 37 + 100) % 1000;
-    const u = `https://picsum.photos/seed/${seed}/1280/720`;
-    await downloadImage(u, imgPath, 20000);
-    console.log(`Image ${index} Picsum OK`);
+    execSync(
+      `ffmpeg -y -f lavfi -i color=c=0x${color}:size=1280x720:rate=1 -vf "drawtext=text='${text}':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=8" -frames:v 1 "${imgPath}" 2>/dev/null`,
+      { timeout: 15000 }
+    );
+    console.log(`Image ${index} FFmpeg OK`);
     return imgPath;
   } catch(e) {
-    console.log(`Image ${index} Picsum échouée: ${e.message}`);
-  }
-
-  // 3. Fallback ultime — image noire générée par FFmpeg
-  try {
     execSync(`ffmpeg -y -f lavfi -i color=c=black:size=1280x720:rate=1 -frames:v 1 "${imgPath}" 2>/dev/null`);
-    console.log(`Image ${index} FFmpeg noir OK`);
+    console.log(`Image ${index} fond noir OK`);
     return imgPath;
-  } catch(e) {
-    throw new Error(`Image ${index} totalement échouée`);
   }
 }
-
 // ─── VOICE GENERATION (ElevenLabs → Google TTS) ───────────
 async function generateVoiceElevenLabs(text, index) {
   return new Promise((resolve, reject) => {
