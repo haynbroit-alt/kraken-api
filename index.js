@@ -65,25 +65,45 @@ async function getScript(topic) {
   });
 }
 
+function getTTS(text, outPath) {
+  // Google TTS - gratuit, francais, sans cle API
+  try {
+    const safe = encodeURIComponent(text.slice(0, 200));
+    const mp3 = outPath.replace('.wav', '.mp3');
+    execSync('curl -s -L -A "Mozilla/5.0" "https://translate.google.com/translate_tts?ie=UTF-8&q=' + safe + '&tl=fr&client=tw-ob" -o ' + mp3, { timeout: 20000 });
+    const size = fs.existsSync(mp3) ? fs.statSync(mp3).size : 0;
+    if (size > 1000) {
+      execSync('ffmpeg -y -i ' + mp3 + ' -ar 44100 -ac 1 ' + outPath + ' 2>/dev/null', { timeout: 10000 });
+      console.log('TTS OK: ' + text.slice(0, 30));
+      return true;
+    }
+  } catch(e) { console.log('TTS erreur: ' + e.message); }
+  // Fallback silence si TTS echoue
+  execSync('ffmpeg -y -f lavfi -i aevalsrc=0:c=mono:s=44100 -t 15 ' + outPath + ' 2>/dev/null', { timeout: 10000 });
+  return false;
+}
+
 function makeVideo(lines, outputPath) {
   const colors = ['0x1a1a2e', '0x16213e', '0x0f3460', '0x2d132c', '0x1b1b2f'];
   const segs = [];
   for (let i = 0; i < lines.length; i++) {
     const img = '/tmp/f' + i + '.png';
-    const sil = '/tmp/s' + i + '.wav';
+    const wav = '/tmp/s' + i + '.wav';
     const seg = '/tmp/g' + i + '.mp4';
     const txt = lines[i].replace(/['"\\:]/g, ' ').slice(0, 40);
+    // Image
     execSync('ffmpeg -y -f lavfi -i color=c=' + colors[i % colors.length] + ':size=1280x720:rate=25 -vf "drawtext=fontcolor=white:fontsize=44:x=(w-text_w)/2:y=(h-text_h)/2:text=\'' + txt + '\'" -frames:v 1 ' + img + ' 2>/dev/null', { timeout: 10000 });
-    execSync('ffmpeg -y -f lavfi -i aevalsrc=0:c=mono:s=44100 -t 60 ' + sil + ' 2>/dev/null', { timeout: 10000 });
-    execSync('ffmpeg -y -loop 1 -i ' + img + ' -i ' + sil + ' -c:v libx264 -tune stillimage -c:a aac -pix_fmt yuv420p -shortest ' + seg + ' 2>/dev/null', { timeout: 30000 });
+    // Voix
+    getTTS(lines[i], wav);
+    // Segment - duree = duree audio (min 10s)
+    execSync('ffmpeg -y -loop 1 -i ' + img + ' -i ' + wav + ' -c:v libx264 -tune stillimage -c:a aac -pix_fmt yuv420p -shortest -t 60 ' + seg + ' 2>/dev/null', { timeout: 90000 });
     segs.push(seg);
     console.log('Segment ' + (i+1) + '/5 OK');
   }
   fs.writeFileSync('/tmp/concat.txt', segs.map(s => "file '" + s + "'").join('\n'));
-  execSync('ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy ' + outputPath + ' 2>/dev/null', { timeout: 60000 });
+  execSync('ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy ' + outputPath + ' 2>/dev/null', { timeout: 120000 });
   console.log('Video OK');
 }
-
 async function refreshToken() {
   if (!token || !token.refresh_token) return;
   return new Promise((resolve) => {
