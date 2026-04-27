@@ -74,7 +74,7 @@ function makeVideo(lines, outputPath) {
     const seg = '/tmp/g' + i + '.mp4';
     const txt = lines[i].replace(/['"\\:]/g, ' ').slice(0, 40);
     execSync('ffmpeg -y -f lavfi -i color=c=' + colors[i % colors.length] + ':size=1280x720:rate=25 -vf "drawtext=fontcolor=white:fontsize=44:x=(w-text_w)/2:y=(h-text_h)/2:text=\'' + txt + '\'" -frames:v 1 ' + img + ' 2>/dev/null', { timeout: 10000 });
-    execSync('ffmpeg -y -f lavfi -i aevalsrc=0:c=mono:s=44100 -t 4 ' + sil + ' 2>/dev/null', { timeout: 10000 });
+    execSync('ffmpeg -y -f lavfi -i aevalsrc=0:c=mono:s=44100 -t 60 ' + sil + ' 2>/dev/null', { timeout: 10000 });
     execSync('ffmpeg -y -loop 1 -i ' + img + ' -i ' + sil + ' -c:v libx264 -tune stillimage -c:a aac -pix_fmt yuv420p -shortest ' + seg + ' 2>/dev/null', { timeout: 30000 });
     segs.push(seg);
     console.log('Segment ' + (i+1) + '/5 OK');
